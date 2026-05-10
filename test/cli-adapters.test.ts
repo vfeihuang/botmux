@@ -4,6 +4,7 @@
  * Run:  pnpm vitest run test/cli-adapters.test.ts
  */
 import { describe, it, expect, vi } from 'vitest';
+import { randomUUID } from 'node:crypto';
 
 // ---------------------------------------------------------------------------
 // Mock external dependencies BEFORE importing adapters
@@ -385,11 +386,12 @@ describe('buildResumeCommand', () => {
   });
 
   it('codex returns null when neither cliSessionId nor history rollout is available', () => {
-    // Test environment has no ~/.codex/history.jsonl, so the fallback scan
-    // returns undefined and we expect null (caller renders the "unsupported"
-    // note instead of fabricating a fake command).
+    // Use a random UUID instead of a fixed string so the test stays hermetic
+    // even on dev machines whose ~/.codex/history.jsonl might happen to
+    // contain a hit for a recognisable test sessionId.
     const a = createCodexAdapter('/bin/codex');
-    expect(a.buildResumeCommand?.({ sessionId: 'sess-codex' })).toBeNull();
+    const unlikely = randomUUID();
+    expect(a.buildResumeCommand?.({ sessionId: unlikely })).toBeNull();
   });
 
   it('codex emits `codex resume <cliSessionId>` when cliSessionId is known', () => {
