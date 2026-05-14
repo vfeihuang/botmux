@@ -151,7 +151,7 @@ export async function checkRequiredScopes(larkAppId: string): Promise<void> {
     // scope 列表。这种"鸡生蛋"情况单独提示：让 admin 开通免审批的
     // self_manage 后下次重启就能自检了。
     if (infoData.code === 99991672) {
-      const authUrl = `https://open.feishu.cn/app/${bot.config.larkAppId}/auth?q=${SELF_MANAGE_SCOPE}&op_from=openapi&token_type=tenant`;
+      const authUrl = `https://open.feishu.cn/app/${bot.config.larkAppId}/auth?q=${encodeURIComponent(SELF_MANAGE_SCOPE)}&op_from=openapi&token_type=tenant`;
       logger.warn(
         `[${larkAppId}] scope 自检 API 被拒（99991672）：应用缺少 ${SELF_MANAGE_SCOPE}（免审批）。` +
         `开通后下次 daemon 重启即可自动核验跨 bot @ 必需权限 ${REQUIRED_BOT_AT_SCOPE}。申请链接：${authUrl}`,
@@ -203,7 +203,7 @@ export async function checkRequiredScopes(larkAppId: string): Promise<void> {
       logger.warn(`[${larkAppId}] no resolved admin open_id in allowedUsers; missing-scope warning visible only in daemon log`);
       return;
     }
-    const authUrl = `https://open.feishu.cn/app/${bot.config.larkAppId}/auth?q=${REQUIRED_BOT_AT_SCOPE}&op_from=openapi&token_type=tenant`;
+    const authUrl = `https://open.feishu.cn/app/${bot.config.larkAppId}/auth?q=${encodeURIComponent(REQUIRED_BOT_AT_SCOPE)}&op_from=openapi&token_type=tenant`;
     const dm =
       `⚠️ botmux 启动检查发现机器人 "${bot.botName ?? larkAppId}" 缺少必需权限\n\n` +
       `权限名：获取群组中其他机器人和用户@当前机器人的消息\n` +

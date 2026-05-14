@@ -603,21 +603,36 @@ async function handleThreadReply(data: any, ctx: RoutingContext): Promise<void> 
     resources.push(...extraResources);
   }
 
-  // Foreign bot @mention prefix: when sender is another bot (sender_type='app'
-  // 且不是本机），把内容包成 [来自 X 的 @mention]\n<原文> 喂给 worker，让 CLI
-  // 知道这是另一个 bot 发的——不是用户直接发的——后续不需要按"对话用户"的
-  // 方式处理。signal-file 路径删掉之前由 processBotMentionSignal 拼，现在
-  // 统一在这里拼。仅影响发给 worker 的 prompt 内容，title / 命令解析 / 日志
-  // 还是用原 parsed.content。
+  // Foreign bot @mention prefix: when sender is another botmux bot，把内容包成
+  // [来自 X 的 @mention]\n<原文> 喂给 worker，让 CLI 知道这是另一个 bot 发的——
+  // 不是用户直接发的——后续不需要按"对话用户"的方式处理。signal-file 路径
+  // 删掉之前由 processBotMentionSignal 拼，现在统一在这里拼。仅影响发给
+  // worker 的 prompt 内容，title / 命令解析 / 日志还是用原 parsed.content。
+  //
+  // 检测策略走双轨：
+  //   1) `sender.sender_type === 'app'` —— 飞书事件标注为机器人发送
+  //   2) sender 的 open_id 在我们本 app 的 cross-ref（bot-openids-<appId>.json）
+  //      里能匹配到一个 botmux 同伴名字
+  // 单 sender_type 不够：跨 bot @mention 在某些 chat-scope 路径下会以
+  // sender_type='user' 投递（已实测）。cross-ref 兜底覆盖这种情况——
+  // 只要之前 cross-ref 学过对方 open_id（@mention 学习链路），即可识别。
   const senderOpenIdForPrefix = parsed.senderId || data?.sender?.sender_id?.open_id;
+  const selfBotOpenId = getBot(larkAppId).botOpenId;
   const isForeignBot =
-    parsed.senderType === 'app' &&
     !!senderOpenIdForPrefix &&
-    senderOpenIdForPrefix !== getBot(larkAppId).botOpenId;
+    senderOpenIdForPrefix !== selfBotOpenId &&
+    (parsed.senderType === 'app' ||
+      isKnownPeerBot(config.session.dataDir, larkAppId, senderOpenIdForPrefix));
   const botSenderPrefix = isForeignBot
     ? `[来自 ${lookupForeignBotName(senderOpenIdForPrefix!, larkAppId)} 的 @mention]\n`
     : '';
   const promptContent = botSenderPrefix + parsed.content;
+  if (isForeignBot) {
+    logger.info(
+      `[${larkAppId}] foreign-bot @mention prefix attached: sender=${senderOpenIdForPrefix?.substring(0, 12)} ` +
+      `senderType=${parsed.senderType} via=${parsed.senderType === 'app' ? 'sender_type' : 'cross-ref'}`,
+    );
+  }
 
   const content = parsed.content.trim();
   // Strip leading @<bot> mentions so "@bot /restart" is recognized as a command.
