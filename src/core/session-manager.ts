@@ -553,10 +553,28 @@ export function restoreActiveSessions(activeSessions: Map<string, DaemonSession>
   if (config.daemon.backendType === 'tmux') {
     for (const [, ds] of activeSessions) {
       const tmuxName = TmuxBackend.sessionName(ds.session.sessionId);
-      if (TmuxBackend.hasSession(tmuxName)) {
-        logger.info(`[${ds.session.sessionId.substring(0, 8)}] Tmux session alive, auto-forking worker to re-attach`);
-        forkWorker(ds, '', true);
+      if (!TmuxBackend.hasSession(tmuxName)) continue;
+
+      // Guard against re-attaching to a tmux session that was started with a
+      // different CLI than the bot is currently configured for. tmux's
+      // attach-session ignores the bin/args we hand to backend.spawn(), so
+      // without this check, changing a bot's cliId in bots.json would silently
+      // resurrect the OLD CLI on restart. Compare persisted session.cliId
+      // (stamped at fork time in worker-pool.forkWorker) against the bot's
+      // current config; mismatch ⇒ kill the stale tmux, let the next message
+      // trigger a fresh spawn.
+      const tag = ds.session.sessionId.substring(0, 8);
+      const sessionCliId = ds.session.cliId;
+      let botCliId: CliId | undefined;
+      try { botCliId = getBot(ds.larkAppId).config.cliId; } catch { /* bot deregistered */ }
+      if (sessionCliId && botCliId && sessionCliId !== botCliId) {
+        logger.warn(`[${tag}] CLI mismatch (session=${sessionCliId}, bot=${botCliId}), killing stale tmux ${tmuxName}`);
+        TmuxBackend.killSession(tmuxName);
+        continue;
       }
+
+      logger.info(`[${tag}] Tmux session alive, auto-forking worker to re-attach`);
+      forkWorker(ds, '', true);
     }
   }
 

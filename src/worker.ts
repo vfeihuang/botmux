@@ -2461,7 +2461,17 @@ function spawnCli(cfg: Extract<DaemonToWorker, { type: 'init' }>): void {
     log('Detected root user — injecting IS_SANDBOX=1 for Claude Code');
   }
 
-  log(`Spawning: ${cliAdapter.resolvedBin} ${args.join(' ')} (cwd: ${cfg.workingDir})`);
+  // Predict reattach vs fresh so the log line tells the truth. When a bmx-*
+  // tmux session is still alive, TmuxBackend.spawn ignores the bin/args and
+  // just `tmux attach-session`s — logging `Spawning: <new bin>` in that case
+  // is misleading and has cost real debugging time. (CliId-mismatch reattach
+  // is now blocked upstream in restoreActiveSessions / killStalePids.)
+  const willReattachTmux = isTmuxMode && TmuxBackend.hasSession(TmuxBackend.sessionName(cfg.sessionId));
+  if (willReattachTmux) {
+    log(`Re-attaching to existing tmux session: ${TmuxBackend.sessionName(cfg.sessionId)} (requested CLI: ${cliAdapter.resolvedBin})`);
+  } else {
+    log(`Spawning fresh CLI: ${cliAdapter.resolvedBin} ${args.join(' ')} (cwd: ${cfg.workingDir})`);
+  }
 
   backend.spawn(cliAdapter.resolvedBin, args, {
     cwd: cfg.workingDir,

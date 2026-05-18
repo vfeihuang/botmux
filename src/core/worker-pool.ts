@@ -1300,6 +1300,24 @@ export function killStalePids(activeSessions_: Session[]): void {
           TmuxBackend.killSession(name);
         }
       }
+      // Per-bot CLI-mismatch cleanup: an active session whose persisted cliId
+      // no longer matches its bot's configured cliId would otherwise get
+      // resurrected on restart by TmuxBackend.spawn's reattach path (which
+      // ignores the bin/args we pass). Kill those tmux now so the session-
+      // manager restore step can fresh-spawn the new CLI on first message.
+      // (Mirror of the restoreActiveSessions guard, applied one layer earlier
+      // for tmux sessions whose daemon-side state is being rebuilt.)
+      for (const session of activeSessions_) {
+        const sessionCliId = session.cliId;
+        if (!sessionCliId || !session.larkAppId) continue;
+        let botCliId: CliId | undefined;
+        try { botCliId = getBot(session.larkAppId).config.cliId; } catch { continue; }
+        if (botCliId && sessionCliId !== botCliId) {
+          const name = TmuxBackend.sessionName(session.sessionId);
+          logger.info(`CLI mismatch for ${session.sessionId.substring(0, 8)} (session=${sessionCliId}, bot=${botCliId}), killing tmux ${name}`);
+          TmuxBackend.killSession(name);
+        }
+      }
     }
 
     // Persist current CLI_ID for next restart (best-effort, single-bot compat)
