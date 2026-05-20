@@ -243,13 +243,19 @@ function findJsonlAcrossProjectsRoot(
 
 const COMPLETION_RE = /\u2733\s*(?:Worked|Crunched|Cogitated|Cooked|Churned|Saut[eé]ed|Baked|Brewed) for \d+[smh]/;
 const CLAUDE_KEYBINDINGS_PATH = join(homedir(), '.claude', 'keybindings.json');
+/** Escape hatch: force a specific chat:submit key regardless of
+ *  keybindings.json. Accepts the same spellings as the config (e.g.
+ *  `meta+enter`, `alt+enter`, `enter`). A value that can't be sent through the
+ *  terminal makes writeInput fail fast with a clear reason. */
 const CLAUDE_SUBMIT_KEY_ENV = 'CLAUDE_CODE_SUBMIT_KEY';
 const CHAT_CONTEXT = 'Chat';
 const CHAT_SUBMIT_ACTION = 'chat:submit';
 const CHAT_NEWLINE_ACTION = 'chat:newline';
 const DEFAULT_SUBMIT_KEY = 'Enter';
 const UNSUPPORTED_SUBMIT_KEY_FAILURE =
-  'Claude Code Chat keybindings require a terminal-sendable chat:submit key such as meta+enter or alt+enter; cmd+enter cannot be sent through tmux/PTY.';
+  'Claude Code Chat keybindings have no terminal-sendable chat:submit key. ' +
+  'Only Enter, Meta+Enter (Alt+Enter) can be delivered through tmux/PTY; ' +
+  'keys such as Cmd+Enter, Ctrl+Enter or Shift+Enter cannot.';
 
 interface ClaudeChatKeybindings {
   submitKeys: string[] | null;
@@ -275,6 +281,13 @@ function readClaudeChatBindings(): Record<string, string> | null {
   return chat?.bindings ?? null;
 }
 
+// Only keys that a terminal can actually deliver to Claude Code's Ink input
+// are listed here. Plain Enter is `\r`; Meta/Alt+Enter is the widely-supported
+// ESC-prefix (`\x1b\r`). Ctrl+Enter and Shift+Enter are deliberately omitted:
+// terminals can't distinguish them from a bare Enter unless the Kitty keyboard
+// protocol / modifyOtherKeys is negotiated, so sending `C-Enter`/`S-Enter`
+// would silently fail to submit. Anything not listed falls through to a
+// fail-fast with a clear reason rather than a phantom submit.
 function toTmuxSubmitKey(key: string): string | null {
   const normalized = key.trim().toLowerCase();
   switch (normalized) {
@@ -284,13 +297,6 @@ function toTmuxSubmitKey(key: string): string | null {
     case 'alt+enter':
     case 'm-enter':
       return 'M-Enter';
-    case 'ctrl+enter':
-    case 'control+enter':
-    case 'c-enter':
-      return 'C-Enter';
-    case 'shift+enter':
-    case 's-enter':
-      return 'S-Enter';
     default:
       return null;
   }
@@ -318,14 +324,18 @@ function selectSubmitKey(bindings: Record<string, string> | null): string | null
   const submitKeys = Object.entries(bindings)
     .filter(([, action]) => action === CHAT_SUBMIT_ACTION)
     .map(([key]) => key);
-  if (submitKeys.length === 0) return DEFAULT_SUBMIT_KEY;
 
-  const terminalFriendlyOrder = ['meta+enter', 'alt+enter', 'enter', 'ctrl+enter', 'control+enter', 'shift+enter'];
+  const terminalFriendlyOrder = ['meta+enter', 'alt+enter', 'enter'];
   for (const candidate of terminalFriendlyOrder) {
     if (submitKeys.some(key => key.toLowerCase() === candidate)) return candidate;
   }
   const supportedSubmitKey = submitKeys.find(key => toTmuxSubmitKey(key));
   if (supportedSubmitKey) return supportedSubmitKey;
+  // No terminal-sendable submit binding (none configured, or only unsendable
+  // ones like cmd+enter). Fall back to plain Enter only when Enter is still
+  // unbound — i.e. Claude Code's built-in Enter=submit is intact. If Enter was
+  // remapped (e.g. to chat:newline), sending Enter would never submit, so we
+  // must fail fast instead.
   return bindingActionForKey(bindings, DEFAULT_SUBMIT_KEY) === undefined ? DEFAULT_SUBMIT_KEY : null;
 }
 

@@ -277,6 +277,65 @@ describe('writeInput: multiline, tmux mode', () => {
     }
   });
 
+  it('claude-code: fails before typing when only unsendable Ctrl+Enter can submit', async () => {
+    // Terminals cannot distinguish Ctrl+Enter from Enter, so it must NOT be
+    // treated as a sendable submit key — fail fast instead of phantom-submitting.
+    const adapter = createClaudeCodeAdapter('/bin/claude');
+    writeClaudeKeybindings({
+      'ctrl+enter': 'chat:submit',
+      enter: 'chat:newline',
+    });
+    try {
+      const pty = makeTmuxPty();
+      const result = await adapter.writeInput(pty, MULTILINE);
+
+      expect(pty.sendText).not.toHaveBeenCalled();
+      expect(pty.sendSpecialKeys).not.toHaveBeenCalled();
+      expect(result).toMatchObject({
+        submitted: false,
+        failureReason: expect.stringContaining('terminal-sendable'),
+      });
+    } finally {
+      removeClaudeKeybindings();
+    }
+  });
+
+  it('claude-code: fails before typing when Enter is newline and no submit key is bound', async () => {
+    // A config that remaps Enter to newline without binding any chat:submit key
+    // would otherwise type the message and emit newlines forever — fail fast.
+    const adapter = createClaudeCodeAdapter('/bin/claude');
+    writeClaudeKeybindings({ enter: 'chat:newline' });
+    try {
+      const pty = makeTmuxPty();
+      const result = await adapter.writeInput(pty, MULTILINE);
+
+      expect(pty.sendText).not.toHaveBeenCalled();
+      expect(pty.sendSpecialKeys).not.toHaveBeenCalled();
+      expect(result).toMatchObject({
+        submitted: false,
+        failureReason: expect.stringContaining('terminal-sendable'),
+      });
+    } finally {
+      removeClaudeKeybindings();
+    }
+  });
+
+  it('claude-code: CLAUDE_CODE_SUBMIT_KEY env overrides the submit key', async () => {
+    const adapter = createClaudeCodeAdapter('/bin/claude');
+    removeClaudeKeybindings();
+    process.env.CLAUDE_CODE_SUBMIT_KEY = 'meta+enter';
+    try {
+      const pty = makeTmuxPty();
+      await adapter.writeInput(pty, MULTILINE);
+
+      // Enter still submits by default here, so soft-newlines stay backslashed;
+      // only the final submit honours the override.
+      expect(pty.sendSpecialKeys.mock.calls.at(-1)).toEqual(['M-Enter']);
+    } finally {
+      delete process.env.CLAUDE_CODE_SUBMIT_KEY;
+    }
+  });
+
   it.each(PASTE_BUFFER_ADAPTERS)('%s: single pasteText(whole) + delayed Enter, no sendText', async (_name, adapter) => {
     // Coco's tmux path uses load-buffer + paste-buffer -d (PtyHandle.pasteText)
     // for the whole content, then a single delayed Enter. tmux wraps in
