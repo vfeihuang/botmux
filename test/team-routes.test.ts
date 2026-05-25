@@ -360,6 +360,41 @@ describe('handleTeamRoute', () => {
     expect(json(res).error).toBe('invite_not_found');
   });
 
+  it('multi-team: removed from the active team can still /me + /switch to another (account APIs not gated on active team)', async () => {
+    const session = await login(); // 张三 member of DEFAULT, active=DEFAULT
+    const c = 'bmx_session=' + session;
+    // create team B → member of DEFAULT + B, active=B
+    let res = makeRes();
+    await call(makeReq('POST', '/api/team/create', { cookie: c, body: { name: 'B' } }), res, '/api/team/create');
+    const teamB = json(res).teamId;
+    // switch active back to DEFAULT, then get kicked out of DEFAULT (still in B)
+    await call(makeReq('POST', '/api/team/switch', { cookie: c, body: { teamId: DEFAULT_TEAM_ID } }), makeRes(), '/api/team/switch');
+    removeMember(dataDir, DEFAULT_TEAM_ID, { unionId: 'on_1' });
+    // /me still works, flags the active team invalid, lists only the teams still joined
+    res = makeRes();
+    await call(makeReq('GET', '/api/team/me', { cookie: c }), res, '/api/team/me');
+    expect(res.statusCode).toBe(200);
+    expect(json(res).currentTeamValid).toBe(false);
+    expect(json(res).teams.map((t: any) => t.id)).toEqual([teamB]);
+    // can still switch to B despite the active team being invalid
+    res = makeRes();
+    await call(makeReq('POST', '/api/team/switch', { cookie: c, body: { teamId: teamB } }), res, '/api/team/switch');
+    expect(res.statusCode).toBe(200);
+    // but a current-team RESOURCE API on an invalid active team is still 403
+    // (switch back to DEFAULT is blocked since 张三 is no longer a member)
+    res = makeRes();
+    await call(makeReq('POST', '/api/team/switch', { cookie: c, body: { teamId: DEFAULT_TEAM_ID } }), res, '/api/team/switch');
+    expect(res.statusCode).toBe(403);
+  });
+
+  it('multi-team: rejects an over-long team name (400)', async () => {
+    const session = await login();
+    const res = makeRes();
+    await call(makeReq('POST', '/api/team/create', { cookie: 'bmx_session=' + session, body: { name: 'x'.repeat(65) } }), res, '/api/team/create');
+    expect(res.statusCode).toBe(400);
+    expect(json(res).error).toBe('name_too_long');
+  });
+
   it('logout clears the session cookie', async () => {
     const res = makeRes();
     await call(makeReq('POST', '/api/team/logout'), res, '/api/team/logout');

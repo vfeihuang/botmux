@@ -273,6 +273,20 @@ async function showApp(){
     if (r.body?.ok) showApp(); else alert('加入失败：' + esc(r.body?.error || r.status));
   };
 
+  // Kicked from the active team but still in others → hop to one automatically.
+  if (me.body?.currentTeamValid === false && teams.length > 0) {
+    await jpost('/api/team/switch', { teamId: teams[0].id });
+    return showApp();
+  }
+  // In no team at all: show only the account-level controls + a notice. Skip the
+  // resource fetches (they'd 403 on an invalid active team).
+  if (teams.length === 0) {
+    $('team-meta').textContent = '你当前不属于任何团队 — 创建一个团队，或用邀请码加入。';
+    ['roster','connectors','logs','members'].forEach(id => { const el = $(id); if (el) el.innerHTML = ''; });
+    $('rf-count').textContent = ''; rosterBots = []; picked.clear();
+    return;
+  }
+
   const r = await jget('/api/team/roster');
   const t = r.body || {};
   $('team-meta').textContent = (t.team?.name || '') + ' · ' + (t.team?.memberCount ?? 0) + ' 名成员';

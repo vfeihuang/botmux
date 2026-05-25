@@ -16,7 +16,7 @@ import { jsonRes } from './workflow-api.js';
 import { pairingStart, pairingStatusView, pairingConsume, PAIR_COOKIE, SESSION_COOKIE } from './pairing-api.js';
 import { getWebSession, revokeWebSession, updateSessionTeam, type WebSession } from '../services/web-session-store.js';
 import { buildTeamRoster } from '../services/team-roster.js';
-import { getTeam, removeMember, isMember, listTeamsForMember, createTeam, addMember } from '../services/team-store.js';
+import { getTeam, removeMember, isMember, listTeams, listTeamsForMember, createTeam, addMember } from '../services/team-store.js';
 import { createInvite, consumeInvite } from '../services/invite-store.js';
 import { setBotCapability, clearBotCapability } from '../services/bot-profile-store.js';
 import { setBotOwner, clearBotOwner } from '../services/bot-owner-store.js';
@@ -26,6 +26,9 @@ import { listTriggerLogs, summarizeTriggerLogs, type TriggerLogListOptions } fro
 import { TEAM_PAGE_HTML } from './team-page.js';
 
 const MAX_ROLE_BYTES = 4 * 1024;
+/** Guardrails against accidental/scripted bloat of teams.json (team内互信，非安全边界). */
+const MAX_TEAMS = 100;
+const MAX_TEAM_NAME = 64;
 /** Write/delete a bot's team-level role file directly under dataDir (matches
  *  role-resolver's `{dataDir}/team-roles/{larkAppId}.md`; kept dataDir-based so
  *  the dashboard process and tests don't depend on role-resolver's config read). */
@@ -134,30 +137,27 @@ export async function handleTeamRoute(
 
   const session = sessionOf();
   if (!session) { jsonRes(res, 401, { ok: false, error: 'not_authenticated' }); return true; }
-  // Re-check membership on every authenticated request: a removed user's session
-  // must stop working immediately (within its TTL), not keep team write access.
-  if (!isMember(dataDir, session.teamId, { unionId: session.identity.unionId, openId: session.identity.openId })) {
-    jsonRes(res, 403, { ok: false, error: 'not_a_member' });
-    return true;
-  }
-  const knownBot = (app: string) => buildTeamRoster(dataDir, session.teamId).bots.some(b => b.larkAppId === app);
+  const identity = { unionId: session.identity.unionId, openId: session.identity.openId };
+  const sessionToken = cookies[SESSION_COOKIE] ?? '';
 
+  // ── Account-level APIs ────────────────────────────────────────────────────
+  // These are NOT gated on the session's *current* active-team membership: a
+  // user removed from their active team but still in others must be able to see
+  // and switch to those teams. Each enforces its own target authorization.
   if (path === '/api/team/me' && method === 'GET') {
-    const teams = listTeamsForMember(dataDir, { unionId: session.identity.unionId, openId: session.identity.openId })
-      .map(t => ({ id: t.id, name: t.name, memberCount: t.members.length }));
-    jsonRes(res, 200, { ok: true, user: session.identity, teamId: session.teamId, teamName: getTeam(dataDir, session.teamId)?.name, teams });
+    const teams = listTeamsForMember(dataDir, identity).map(t => ({ id: t.id, name: t.name, memberCount: t.members.length }));
+    // currentTeamValid=false means the session's active team no longer includes
+    // the user (kicked); the UI hops to another team or shows the no-team state.
+    jsonRes(res, 200, { ok: true, user: session.identity, teamId: session.teamId, teamName: getTeam(dataDir, session.teamId)?.name, currentTeamValid: isMember(dataDir, session.teamId, identity), teams });
     return true;
   }
-  // Switch the session's active team (must already be a member of the target).
+  // Switch the session's active team — only the TARGET's membership matters.
   if (path === '/api/team/switch' && method === 'POST') {
     let body: any;
     try { body = await readBody(req); } catch { jsonRes(res, 400, { ok: false, error: 'bad_json' }); return true; }
     const teamId = String(body?.teamId ?? '');
-    if (!isMember(dataDir, teamId, { unionId: session.identity.unionId, openId: session.identity.openId })) {
-      jsonRes(res, 403, { ok: false, error: 'not_a_member' });
-      return true;
-    }
-    updateSessionTeam(dataDir, cookies[SESSION_COOKIE] ?? '', teamId);
+    if (!isMember(dataDir, teamId, identity)) { jsonRes(res, 403, { ok: false, error: 'not_a_member' }); return true; }
+    if (!updateSessionTeam(dataDir, sessionToken, teamId)) { jsonRes(res, 409, { ok: false, error: 'session_invalid' }); return true; }
     jsonRes(res, 200, { ok: true, teamId });
     return true;
   }
@@ -167,13 +167,16 @@ export async function handleTeamRoute(
     try { body = await readBody(req); } catch { jsonRes(res, 400, { ok: false, error: 'bad_json' }); return true; }
     const name = String(body?.name ?? '').trim();
     if (!name) { jsonRes(res, 400, { ok: false, error: 'name_required' }); return true; }
+    if (name.length > MAX_TEAM_NAME) { jsonRes(res, 400, { ok: false, error: 'name_too_long' }); return true; }
+    if (listTeams(dataDir).length >= MAX_TEAMS) { jsonRes(res, 400, { ok: false, error: 'team_limit_reached' }); return true; }
     const team = createTeam(dataDir, name);
-    addMember(dataDir, team.id, { unionId: session.identity.unionId, openId: session.identity.openId, name: session.identity.name });
-    updateSessionTeam(dataDir, cookies[SESSION_COOKIE] ?? '', team.id);
+    addMember(dataDir, team.id, { ...identity, name: session.identity.name });
+    if (!updateSessionTeam(dataDir, sessionToken, team.id)) { jsonRes(res, 409, { ok: false, error: 'session_invalid' }); return true; }
     jsonRes(res, 200, { ok: true, teamId: team.id, name: team.name });
     return true;
   }
   // Join another team via a single-use invite code; the session switches to it.
+  // Authorization is the bearer invite (single-use), not current-team membership.
   if (path === '/api/team/join' && method === 'POST') {
     let body: any;
     try { body = await readBody(req); } catch { jsonRes(res, 400, { ok: false, error: 'bad_json' }); return true; }
@@ -181,11 +184,19 @@ export async function handleTeamRoute(
     if (!code) { jsonRes(res, 400, { ok: false, error: 'code_required' }); return true; }
     const inv = consumeInvite(dataDir, code);
     if (!inv.ok) { jsonRes(res, 403, { ok: false, error: `invite_${inv.reason}` }); return true; }
-    addMember(dataDir, inv.teamId, { unionId: session.identity.unionId, openId: session.identity.openId, name: session.identity.name });
-    updateSessionTeam(dataDir, cookies[SESSION_COOKIE] ?? '', inv.teamId);
+    addMember(dataDir, inv.teamId, { ...identity, name: session.identity.name });
+    if (!updateSessionTeam(dataDir, sessionToken, inv.teamId)) { jsonRes(res, 409, { ok: false, error: 'session_invalid' }); return true; }
     jsonRes(res, 200, { ok: true, teamId: inv.teamId, name: getTeam(dataDir, inv.teamId)?.name });
     return true;
   }
+
+  // ── Current-team resource APIs ────────────────────────────────────────────
+  // Everything below operates on the session's active team, so it re-checks
+  // membership of THAT team on every request: a removed user loses access
+  // immediately (within the session TTL), not just at next login.
+  if (!isMember(dataDir, session.teamId, identity)) { jsonRes(res, 403, { ok: false, error: 'not_a_member' }); return true; }
+  const knownBot = (app: string) => buildTeamRoster(dataDir, session.teamId).bots.some(b => b.larkAppId === app);
+
   if (path === '/api/team/roster' && method === 'GET') {
     jsonRes(res, 200, { ok: true, ...buildTeamRoster(dataDir, session.teamId) });
     return true;
