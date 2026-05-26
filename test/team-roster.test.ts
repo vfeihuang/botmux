@@ -70,6 +70,12 @@ describe('buildTeamRoster', () => {
     expect(r.bots.find(b => b.larkAppId === 'cli_run2')!.cliId).toBe('codex');
   });
 
+  it('liveBots=[] is authoritative (empty roster) — does NOT fall back to stale bots-info.json', () => {
+    writeBotsInfo([{ larkAppId: 'cli_stale', botOpenId: null, botName: 'Stale', cliId: 'claude' }]);
+    const r = buildTeamRoster(dataDir, DEFAULT_TEAM_ID, undefined, []); // registry empty
+    expect(r.bots).toEqual([]); // not the stale bots-info entry
+  });
+
   it('liveBots enriches cliId from bots-info.json by larkAppId', () => {
     writeBotsInfo([{ larkAppId: 'cli_a', botOpenId: null, botName: 'A-info', cliId: 'claude' }]);
     const r = buildTeamRoster(dataDir, DEFAULT_TEAM_ID, undefined, [{ larkAppId: 'cli_a', botName: 'A-live' }]);

@@ -61,9 +61,12 @@ export function buildTeamRoster(dataDir: string, teamId: string = DEFAULT_TEAM_I
   const team = getTeam(dataDir, teamId) ?? getDefaultTeam(dataDir);
   const info = readBotsInfo(dataDir);
   let entries: BotInfoEntry[];
-  if (liveBots && liveBots.length) {
-    // Live registry is the source of truth; enrich cliId/openId/name from
-    // bots-info.json (which carries cliId — the registry doesn't) by larkAppId.
+  if (liveBots !== undefined) {
+    // Live registry is the source of truth WHEN PROVIDED — including an empty
+    // array (no daemons running ⇒ empty roster). Never fall back to a stale
+    // bots-info.json here, or removed/offline bots would linger. Enrich
+    // cliId/openId/name from bots-info.json (which carries cliId — the registry
+    // doesn't) by larkAppId.
     const byId = new Map(info.map(e => [e.larkAppId, e]));
     entries = liveBots.map(lb => {
       const ex = byId.get(lb.larkAppId);
