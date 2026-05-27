@@ -116,7 +116,16 @@ export async function orchestrateFederatedGroup(
           body: JSON.stringify({ name, larkAppIds, ownerUnionIds, requestId }),
         });
         const dj = await dr.json().catch(() => ({} as any));
-        if (dr.ok && dj?.ok && dj.chatId) return { status: 200, body: { ...dj, delegatedTo: dep.name, missingOperatorIdentity } };
+        if (dr.ok && dj?.ok && dj.chatId) {
+          // The delegate creator added the owners IT could; owners it couldn't
+          // reach (e.g. a THIRD deployment's owner) must still be added via their
+          // own deployment — same post-create delegation as the local-create path.
+          let invalidOwners = dj.invalidOwnerUnionIds ?? [];
+          if (invalidOwners.length > 0) {
+            invalidOwners = await delegateAddOwners(dataDir, teamId, dj.chatId, invalidOwners, larkAppIds, requestId, deps.fetcher);
+          }
+          return { status: 200, body: { ...dj, invalidOwnerUnionIds: invalidOwners, delegatedTo: dep.name, missingOperatorIdentity } };
+        }
         lastErr = dj?.error || `hub_${dr.status}`;
       } catch (e) {
         // Timeout ⇒ the delegate MAY have created the group (lost response). Stop —
