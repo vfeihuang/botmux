@@ -23,7 +23,11 @@ Claude 的 `BridgeTurnQueue.handleTurnStart`（bridge-turn-queue.ts:268）已解
 
 把等价逻辑移植到 `CodexBridgeQueue.ingest` 的 `user` 分支：
 
-> 处理一个 `user` 事件时，若存在 `collecting` 且其 `finalText === undefined`，且该 user 事件不早于 `collecting.markTimeMs`（防重放历史），则从 queue 移除该 collecting turn 并清空 `collecting`，然后照常做 fingerprint 匹配 / 起新 turn。
+> 处理一个 `user` 事件时，先用既有的 tooOld / fingerprint / adopt-local 判定算出它是否会**真的启动一个 turn**（`willStartNext` 命中 next pending，或 `willSynthLocal` 合成 local turn）。**仅当其一成立**且存在 `collecting` 且其 `finalText === undefined` 时，从 queue 移除该 collecting turn 并清空 `collecting`，然后照常起新 turn / 合成 local。
+
+> 把 HOL-drop 和实际 turn-start 统一到同一套判定（而非给 HOL 单独一条 freshness 规则），让 5s-skew 容忍、fingerprint、adopt-local 三个入口共用一个不变量：重放历史事件 tooOld → 不启动 turn → 不会误丢；非匹配 stray user（非 adopt）被忽略而非当作 turn 边界。
+>
+> （早期 v2 曾用独立的 `ev.timestampMs >= collecting.markTimeMs` 做 HOL 新鲜度，但 turn-start 容忍 5s skew 且 `markTimeMs` 经 `Math.max` 不回退，导致早于 mark 几秒的合法 live 事件不触发 HOL-drop → 楔死。v3 统一判定后此 P1 消失。）
 
 ### 各形态行为
 
@@ -34,9 +38,9 @@ Claude 的 `BridgeTurnQueue.handleTurnStart`（bridge-turn-queue.ts:268）已解
 ### 关键正确性点
 
 - 丢弃的是已 `started` 的 collecting turn；`queue.find(t => !t.started)` 本就跳过它，故 drop **不影响**新 turn 的匹配，只是解除队首阻塞。
-- 起始的 `<environment_context>`（role=user）到来时 collecting 为 null → drop 是 no-op，安全。
+- 起始的 `<environment_context>`（role=user）：fingerprint 不命中、非 adopt 不合成 local → `willStartNext/willSynthLocal` 均 false → 不 drop（且 collecting 此时本就为 null），安全。
 - 重放安全：ingest 对 uuid 幂等（seen 集合），已见 user2 不会二次 drop。
-- 历史保护：drop 用 `ev.timestampMs >= collecting.markTimeMs` 兜底，旧的重放 user 事件不会误丢正在 collecting 的实时 turn。
+- 历史保护：复用 turn-start 的 tooOld 判定——旧的重放 user 事件 tooOld → 不启动 turn → 不触发 HOL-drop，不会误丢正在 collecting 的实时 turn（与 v2 的独立 markTimeMs gate 不同，这里和 turn-start 共用同一 5s-skew 不变量，避免两套规则不一致）。
 - suppression window：t1 被丢后只 drain t2，t2 的窗口锚定 user2 的 dequeue 时间戳（既有 markTimeMs override），合并回复的 botmux send 落在 t2 窗口内 → 正确抑制。
 
 ## 方案 B（不采纳）

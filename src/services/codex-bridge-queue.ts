@@ -19,16 +19,20 @@
  * Attribution rule:
  *   - mark()           — push a pending turn anchored to Lark fingerprint.
  *   - ingest(events)   —
- *       * 'user' event: first apply HOL-block-drop — if a turn is still
- *         collecting with no finalText, discard it. Codex 0.134.0 type-ahead
- *         is an active-turn STEER: a queued message typed while a tool-running
- *         turn is in flight gets pulled into that SAME turn, which emits one
- *         merged final (rollout: user1 → user2 → assistant_final). The earlier
- *         turn never gets its own final, so without this drop it sits at the
- *         queue head forever and wedges drainEmittable(). Then: a 'user' event
- *         whose text matches the head pending turn's fingerprint starts it
- *         (collecting); no match → dropped, OR (adopt-only) synthesised as a
- *         started local turn ahead of any unstarted Lark turn.
+ *       * 'user' event: first classify it — does it START the head pending
+ *         turn (fingerprint match, not tooOld) or SYNTHESISE a local turn
+ *         (adopt-only)? Only a 'user' event that does one of those triggers
+ *         HOL-block-drop: if a turn is still collecting with no finalText,
+ *         discard it. Codex 0.134.0 type-ahead is an active-turn STEER: a
+ *         queued message typed while a tool-running turn is in flight gets
+ *         pulled into that SAME turn, which emits one merged final (rollout:
+ *         user1 → user2 → assistant_final). The earlier turn never gets its
+ *         own final, so without this drop it sits at the queue head forever
+ *         and wedges drainEmittable(). A 'user' event that neither matches a
+ *         fingerprint nor synthesises a local turn (e.g. the startup
+ *         <environment_context>, or replayed history) is IGNORED and does NOT
+ *         drop the collecting turn — keying HOL-drop off the turn-start
+ *         decision reuses its tooOld/fingerprint freshness as one invariant.
  *       * 'assistant_final' event → the currently-collecting turn closes
  *         with finalText set; eligible for emit on the next drain.
  *   - drainEmittable() — pop FIFO any leading turn that is started AND

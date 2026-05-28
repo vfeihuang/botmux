@@ -152,9 +152,12 @@ export interface CliAdapter {
    *  queued messages immediately instead of waiting for idle detection.
    *  Only set for CLIs whose input handling is known to tolerate this —
    *  Claude Code buffers input internally and processes it after the current
-   *  turn; CoCo (0.120.32+) and Codex (0.134.0+) park it in their own TUI queue
-   *  and dequeue it when the current turn ends, writing the transcript user
-   *  event only at dequeue time so the bridge's attribution stays correct. */
+   *  turn; CoCo (0.120.32+) parks it in its TUI queue and writes the transcript
+   *  user event only at dequeue time (transcript stays interleaved); Codex
+   *  (0.134.0+) parks it too but STEERS it into the active turn — a tool-running
+   *  turn can merge the queued input into one final (rollout: user1 → user2 →
+   *  assistant_final). CodexBridgeQueue's HOL-block-drop keeps attribution
+   *  correct for both shapes. */
   readonly supportsTypeAhead?: boolean;
 
   /** Whether CLI uses alternate screen buffer */
