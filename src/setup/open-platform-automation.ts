@@ -68,6 +68,8 @@ export type OpenPlatformAutomationResult =
       sessionSource: FeishuWebSessionSource;
       cookieCount: number;
       scopeCount: number;
+      skippedScopeCount: number;
+      scopeWarning?: string;
       versionId?: string;
     }
   | {
@@ -99,7 +101,6 @@ export interface OpenPlatformAutomationOptions {
   maxWaitMs?: number;
   onQrCode?: (info: { qrText: string; qrPayload: string }) => void | Promise<void>;
   onStatus?: (message: string) => void | Promise<void>;
-  visibleMemberIds?: string[];
 }
 
 
@@ -131,7 +132,6 @@ export interface FeishuWebSessionOptions {
   maxWaitMs?: number;
   onQrCode?: (info: { qrText: string; qrPayload: string }) => void | Promise<void>;
   onStatus?: (message: string) => void | Promise<void>;
-  visibleMemberIds?: string[];
 }
 
 
@@ -468,12 +468,25 @@ export async function automateOpenPlatformSetup(
   const catalog = extractOpenPlatformScopeEntries(allScopesPayload);
   const mapped = mapManifestScopesToOpenPlatformIds(manifest, catalog);
   const missing = [...mapped.missingTenantScopes, ...mapped.missingUserScopes];
+  const skippedScopeCount = missing.length;
   if (missing.length > 0) {
     console.warn(`Warning: ${missing.length} scopes are not present in the Open Platform catalog and will be skipped: ${missing.slice(0, 8).join(', ')}`);
   }
 
+  // "部分权限即成功"：有的租户目录下个别权限不可授予，整批 scope/update 会被拒。
+  // 把权限注册做成非致命——失败只告警并继续配 redirect / 建版本，不让权限问题阻塞建 bot。
+  let importedScopeCount = mapped.tenantScopeIds.length + mapped.userScopeIds.length;
+  let scopeWarning: string | undefined;
+  if (importedScopeCount > 0) {
+    try {
+      await postJson(`/developers/v1/scope/update/${options.appId}`, buildScopeUpdatePayload(options.appId, mapped));
+    } catch (err: any) {
+      scopeWarning = safeErrorMessage(err);
+      importedScopeCount = 0;
+    }
+  }
+
   try {
-    await postJson(`/developers/v1/scope/update/${options.appId}`, buildScopeUpdatePayload(options.appId, mapped));
     await postJson(`/developers/v1/safe_setting/update/${options.appId}`, buildSafeSettingPayload(options.appId));
     const contactRange = await postJson(`/developers/v1/contact_range/${options.appId}`, {});
     const visibleMemberIds = extractContactRangeMemberIds(contactRange);
@@ -489,7 +502,9 @@ export async function automateOpenPlatformSetup(
       sessionFile,
       sessionSource: preparedSession.source,
       cookieCount: preparedSession.cookieCount,
-      scopeCount: mapped.tenantScopeIds.length + mapped.userScopeIds.length,
+      scopeCount: importedScopeCount,
+      skippedScopeCount,
+      scopeWarning,
       versionId,
     };
   } catch (err: any) {

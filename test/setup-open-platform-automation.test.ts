@@ -321,4 +321,72 @@ describe('automateOpenPlatformSetup', () => {
     expect(updateHeaders.get('x-csrf-token')).toBe('csrf_larkoffice');
     expect(updateHeaders.get('cookie')).toContain('lark_oapi_csrf_token=csrf_larkoffice_cookie');
   });
+
+  it('treats a rejected scope batch as success (partial-permission tenants) and still configures redirect + version', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'botmux-open-platform-'));
+    const sessionFile = join(dir, 'feishu-session.json');
+    writeStoredCookiesToSessionFile(sessionFile, [cookie()]);
+    const calls: string[] = [];
+    const fetchImpl = (async (url: string | URL | Request) => {
+      const href = String(url);
+      calls.push(href);
+      if (href === 'https://ask.feishu.cn/') return new Response('ask home', { status: 200 });
+      if (href.endsWith('/auth')) return new Response('<script>window.csrfToken="csrf_auto"</script>', { status: 200 });
+      if (href.includes('/scope/all/')) {
+        return Response.json({ code: 0, data: { appScopeList: [{ id: 't1', name: 'im:message' }], userScopeList: [] } });
+      }
+      if (href.includes('/scope/update/')) return Response.json({ code: 1, msg: 'scope not grantable for tenant' });
+      if (href.includes('/app_version/create/')) return Response.json({ code: 0, data: { versionId: 'v1' } });
+      return Response.json({ code: 0 });
+    }) as typeof fetch;
+
+    const result = await automateOpenPlatformSetup({
+      appId: 'cli_x',
+      sessionFilePath: sessionFile,
+      fetchImpl,
+      scopeManifest: { scopes: { tenant: ['im:message'], user: [] } },
+    });
+
+    expect(result.ok).toBe(true);
+    if (result.ok) {
+      expect(result.scopeCount).toBe(0);
+      expect(result.scopeWarning).toBeTruthy();
+      expect(result.versionId).toBe('v1');
+    }
+    // 权限被租户拒绝不阻塞后续：redirect / 版本 / 发布仍然走完。
+    expect(calls.some(u => u.includes('/safe_setting/update/'))).toBe(true);
+    expect(calls.some(u => u.includes('/publish/commit/'))).toBe(true);
+  });
+
+  it('skips scope update when no manifest scope exists in this tenant catalog, still succeeding', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'botmux-open-platform-'));
+    const sessionFile = join(dir, 'feishu-session.json');
+    writeStoredCookiesToSessionFile(sessionFile, [cookie()]);
+    const calls: string[] = [];
+    const fetchImpl = (async (url: string | URL | Request) => {
+      const href = String(url);
+      calls.push(href);
+      if (href === 'https://ask.feishu.cn/') return new Response('ask home', { status: 200 });
+      if (href.endsWith('/auth')) return new Response('<script>window.csrfToken="csrf_auto"</script>', { status: 200 });
+      if (href.includes('/scope/all/')) {
+        return Response.json({ code: 0, data: { appScopeList: [], userScopeList: [] } });
+      }
+      if (href.includes('/app_version/create/')) return Response.json({ code: 0, data: { versionId: 'v1' } });
+      return Response.json({ code: 0 });
+    }) as typeof fetch;
+
+    const result = await automateOpenPlatformSetup({
+      appId: 'cli_x',
+      sessionFilePath: sessionFile,
+      fetchImpl,
+      scopeManifest: { scopes: { tenant: ['im:message', 'contact:user.base:readonly'], user: ['auth:user_access_token:read'] } },
+    });
+
+    expect(result.ok).toBe(true);
+    if (result.ok) {
+      expect(result.scopeCount).toBe(0);
+      expect(result.skippedScopeCount).toBe(3);
+    }
+    expect(calls.some(u => u.includes('/scope/update/'))).toBe(false);
+  });
 });
