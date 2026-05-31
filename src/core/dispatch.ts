@@ -103,3 +103,32 @@ export function buildDispatchMessages(input: {
     mentionedOpenIds: input.bots.map(b => b.openId),
   };
 }
+
+/**
+ * Build the "repo prime" message: a `/repo <path>` command @-mentioning the
+ * target bots. Sent as the first message into a freshly-seeded thread, it makes
+ * each sub-bot's daemon resolve the working dir and spawn its CLI **idle** (no
+ * repo-selection card, no manual "直接开始" click) — i.e. standby. A follow-up
+ * brief then becomes each session's first prompt. `/repo` is an existing botmux
+ * command, so this works against any current daemon (no receiving-side change).
+ *
+ * The `/repo <path>` text node is placed *after* the @-nodes so that, once the
+ * receiving daemon strips leading mentions, it sees `/repo <path>` as the command.
+ */
+export function buildRepoPrimeContent(input: {
+  path: string;
+  bots: DispatchBot[];
+}): { content: PostParagraph[]; mentionedOpenIds: string[] } {
+  const path = input.path.trim();
+  if (!path) throw new Error('repo prime requires a path');
+  if (input.bots.length === 0) throw new Error('repo prime requires at least one bot');
+
+  const para: PostNode[] = [];
+  for (const b of input.bots) {
+    para.push({ tag: 'at', user_id: b.openId });
+    para.push({ tag: 'text', text: ' ' });
+  }
+  para.push({ tag: 'text', text: `/repo ${path}` });
+
+  return { content: [para], mentionedOpenIds: input.bots.map(b => b.openId) };
+}

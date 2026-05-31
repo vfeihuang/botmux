@@ -10,7 +10,11 @@
  * Run: pnpm vitest run test/dispatch.test.ts
  */
 import { describe, it, expect } from 'vitest';
-import { parseDispatchBotSpec, buildDispatchMessages } from '../src/core/dispatch.js';
+import {
+  parseDispatchBotSpec,
+  buildDispatchMessages,
+  buildRepoPrimeContent,
+} from '../src/core/dispatch.js';
 
 describe('parseDispatchBotSpec', () => {
   it('parses a bare open_id', () => {
@@ -77,5 +81,43 @@ describe('buildDispatchMessages', () => {
 
   it('throws on an empty title', () => {
     expect(() => buildDispatchMessages({ title: '   ', brief: 'b', bots })).toThrow();
+  });
+});
+
+describe('buildRepoPrimeContent', () => {
+  const bots = [
+    { openId: 'ou_a', name: 'Alice', role: 'coder' },
+    { openId: 'ou_b', name: 'Bob', role: 'reviewer' },
+  ];
+
+  it('@-mentions every bot so the prime triggers each session', () => {
+    const r = buildRepoPrimeContent({ path: '/root/iserver/botmux', bots });
+    expect(r.mentionedOpenIds).toEqual(['ou_a', 'ou_b']);
+    const ats = r.content.flat().filter(n => n.tag === 'at').map(n => (n as { user_id: string }).user_id);
+    expect(ats).toEqual(['ou_a', 'ou_b']);
+  });
+
+  it('emits a `/repo <path>` command after the mentions (so it parses as the first command)', () => {
+    const r = buildRepoPrimeContent({ path: '/root/iserver/botmux', bots });
+    const joined = r.content
+      .flat()
+      .filter(n => n.tag === 'text')
+      .map(n => (n as { text: string }).text)
+      .join('');
+    expect(joined).toContain('/repo /root/iserver/botmux');
+    // The /repo text node must come after the at-nodes so that, post
+    // mention-strip, the receiving daemon sees "/repo <path>" as the command.
+    const flat = r.content.flat();
+    const lastAt = flat.map(n => n.tag).lastIndexOf('at');
+    const repoIdx = flat.findIndex(n => n.tag === 'text' && (n as { text: string }).text.includes('/repo '));
+    expect(repoIdx).toBeGreaterThan(lastAt);
+  });
+
+  it('throws on an empty path', () => {
+    expect(() => buildRepoPrimeContent({ path: '   ', bots })).toThrow();
+  });
+
+  it('throws when no bots are given', () => {
+    expect(() => buildRepoPrimeContent({ path: '/x', bots: [] })).toThrow();
   });
 });
