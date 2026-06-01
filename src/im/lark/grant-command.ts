@@ -26,6 +26,30 @@ export function parseGrantTargets(message: any, botOpenId: string | undefined): 
     seen.add(oid);
     out.push({ openId: oid, name: x.name ?? oid });
   }
+  // post（富文本）消息的 message.mentions 常为空，@ 落在 inline `at` 节点里。不回退的话
+  // `@Operator /grant @Target` 的富文本会解析出 0 目标 → 落进裸 /grant 分支误开整群授权。
+  if (out.length === 0) return parsePostAtMentions(message, botOpenId);
+  return out;
+}
+
+/** 从 post inline `at` 节点取非本 bot 的目标（user_name 兜 name），按 user_id 去重、保持顺序。 */
+function parsePostAtMentions(message: any, botOpenId: string | undefined): Array<{ openId: string; name: string }> {
+  const seen = new Set<string>();
+  const out: Array<{ openId: string; name: string }> = [];
+  let content: any;
+  try { content = JSON.parse(message?.content ?? '{}'); } catch { return out; }
+  const inner = content?.zh_cn ?? content?.en_us ?? content;
+  if (!Array.isArray(inner?.content)) return out;
+  for (const para of inner.content) {
+    if (!Array.isArray(para)) continue;
+    for (const node of para) {
+      if (node?.tag !== 'at') continue;
+      const oid = node.user_id;
+      if (!oid || oid === botOpenId || seen.has(oid)) continue;
+      seen.add(oid);
+      out.push({ openId: oid, name: node.user_name ?? oid });
+    }
+  }
   return out;
 }
 
@@ -60,6 +84,52 @@ export function parseGrantQuota(text: string, mentions: any[]): { ok: true; quot
   return { ok: true, quota: n };
 }
 
+function escapeRe(s: string): string {
+  return s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
+
+/**
+ * 本 bot 是否「只是作为 /grant、/revoke 的目标」被 @（@ 出现在命令词之后），
+ * 而不是被前导 @ 点名执行命令的操作 bot。命中（仅目标）返回 true，调用方应静默放手——
+ * 否则异主目标 bot 会误回 owner_only、同主目标 bot 会把自己剔空后误开整群授权。
+ *
+ * text 与 post（富文本）两种消息形态都覆盖，二者入口都能命中 /grant（见 event-dispatcher
+ * 的 extractMessageTextForRouting / isBotMentioned），所以 guard 必须同时兜住：
+ *  - text：{"text":"@_user_1 /grant @_user_2"}，@ 是占位符 key；用「key 后不接数字」的
+ *    边界锁定整 token，规避 @_user_1 / @_user_10 这类 key 前缀歧义。
+ *  - post：@ 是独立的 `at` 节点（不在 text 里、mentions 可能为空），按文档节点顺序比较
+ *    本 bot 的 `at` 节点与含命令词的 text 节点的先后。
+ */
+export function isGrantTargetOnly(message: any, botOpenId: string | undefined): boolean {
+  if (!botOpenId) return false;
+  let content: any;
+  try { content = JSON.parse(message?.content ?? '{}'); } catch { return false; }
+
+  if (typeof content?.text === 'string') {
+    const key = (message?.mentions ?? []).find((m: any) => m?.id?.open_id === botOpenId)?.key;
+    if (!key) return false;
+    const cmdIdx = content.text.search(/\/(?:grant|revoke)\b/i);
+    const keyMatch = new RegExp(`${escapeRe(key)}(?!\\d)`).exec(content.text);
+    const myIdx = keyMatch ? keyMatch.index : -1;
+    return cmdIdx >= 0 && myIdx > cmdIdx;
+  }
+
+  const inner = content?.zh_cn ?? content?.en_us ?? content;
+  if (Array.isArray(inner?.content)) {
+    let seq = 0, cmdSeq = -1, mySeq = -1;
+    for (const para of inner.content) {
+      if (!Array.isArray(para)) continue;
+      for (const node of para) {
+        if (cmdSeq < 0 && node?.tag === 'text' && /\/(?:grant|revoke)\b/i.test(node.text ?? '')) cmdSeq = seq;
+        if (mySeq < 0 && node?.tag === 'at' && node.user_id === botOpenId) mySeq = seq;
+        seq++;
+      }
+    }
+    return cmdSeq >= 0 && mySeq > cmdSeq;
+  }
+  return false;
+}
+
 /** 返回 true 表示已拦截（不再进入路由/spawn）。 */
 export async function tryHandleGrantCommand(
   larkAppId: string, message: any, senderOpenId: string | undefined,
@@ -72,6 +142,15 @@ export async function tryHandleGrantCommand(
   const isGrant = /^\/grant(\s|$)/i.test(text);
   const isRevoke = /^\/revoke(\s|$)/i.test(text);
   if (!isGrant && !isRevoke) return false;
+
+  // 本 bot 只是作为 /grant、/revoke 的【目标】被 @（`@OperatorBot /grant @ThisBot`，
+  // 常见于 owner 用 `/grant @bot` 授权另一个 bot 在本群协作）→ 这条命令是发给前导 @ 的
+  // 操作 bot 的，本 bot 的 daemon 必须放手：既不能回 owner_only（异主 bot 会误报「仅 owner
+  // 可使用 /grant」），也不能把自己从 targets 剔空后误判成裸 /grant 给整群开授权。
+  if (isGrantTargetOnly(message, getBotOpenId(larkAppId))) {
+    logger.debug(`[grant:${larkAppId}] ignoring /grant|/revoke where this bot is only a target`);
+    return true;  // 拦截（不喂 CLI），但不回复、不改授权——命令属于操作 bot
+  }
 
   // 多 bot 群：必须明确 @ 当前 bot 才由本 daemon 处理；否则吞掉（不喂 CLI）。
   if (!isBotMentioned(larkAppId, message, senderOpenId)) return true;
