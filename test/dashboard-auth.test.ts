@@ -421,12 +421,29 @@ describe('decideDashboardAuth — publicReadOnly mode', () => {
       '/api/webhook-secrets',
       '/api/trigger-logs',
       '/api/bot-onboarding/ob-1',
+      // Allow-list is fail-closed: these read endpoints are NOT public-readable
+      // (role/persona content, per-bot oncall config, CLI option metadata).
+      '/api/roles/cli_app/oc_chat',
+      '/api/bots',
+      '/api/cli-options',
+      // A path that doesn't exist yet must also default to private.
+      '/api/some-future-read',
     ]) {
       const d = decideDashboardAuth({
         method: 'GET', pathname, hasTokenParam: false,
         presentedToken: undefined, activeToken: TOK, publicReadOnly: true,
       });
       expect(d.kind, pathname).toBe('deny401');
+    }
+  });
+
+  it('allow-listed watch-work reads are public in publicReadOnly', () => {
+    for (const pathname of ['/api/sessions', '/api/schedules', '/api/settings', '/api/groups', '/events']) {
+      const d = decideDashboardAuth({
+        method: 'GET', pathname, hasTokenParam: false,
+        presentedToken: undefined, activeToken: TOK, publicReadOnly: true,
+      });
+      expect(d.kind, pathname).toBe('allow');
     }
   });
 
