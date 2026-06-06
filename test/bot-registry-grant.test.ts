@@ -2,6 +2,19 @@ import { describe, it, expect } from 'vitest';
 import { parseBotConfigsFromText, getOwnerOpenId, registerBot } from '../src/bot-registry.js';
 
 describe('bot-registry grant additions', () => {
+  it('parseBotConfigsFromText preserves & filters chatReplyModes (tri-state)', () => {
+    const cfgs = parseBotConfigsFromText(JSON.stringify([{
+      larkAppId: 'rm1', larkAppSecret: 's',
+      chatReplyModes: { oc_1: 'topic_alias', oc_2: 'chat', oc_4: 'new-topic', oc_3: 'bad', '': 'topic_alias' },
+    }]));
+    expect(cfgs[0].chatReplyModes).toEqual({ oc_1: 'topic_alias', oc_2: 'chat', oc_4: 'new-topic' });
+  });
+
+  it('parseBotConfigsFromText leaves chatReplyModes undefined when absent/all-invalid', () => {
+    expect(parseBotConfigsFromText(JSON.stringify([{ larkAppId: 'rm2', larkAppSecret: 's' }]))[0].chatReplyModes).toBeUndefined();
+    expect(parseBotConfigsFromText(JSON.stringify([{ larkAppId: 'rm3', larkAppSecret: 's', chatReplyModes: { oc_1: 'nope' } }]))[0].chatReplyModes).toBeUndefined();
+  });
+
   it('parseBotConfigsFromText preserves & filters chatGrants', () => {
     const cfgs = parseBotConfigsFromText(JSON.stringify([{
       larkAppId: 'a1', larkAppSecret: 's',
