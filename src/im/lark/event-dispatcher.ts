@@ -1196,15 +1196,35 @@ export function startLarkEventDispatcher(larkAppId: string, larkAppSecret: strin
           if (!isBotMentioned(larkAppId, message, undefined)) return;
           const decision = await decideRoutingWithSource(larkAppId, message);
           const ctx = { scope: decision.scope, anchor: decision.anchor };
+          // Honor `/t` / `/topic` from bot senders too, aligning with the human
+          // path so an explicit `@bot /t …` handoff seeds a fresh topic instead of
+          // sticking to chat-scope. Applied BEFORE the gate (and the topic_alias
+          // fold) so vetting keys on the FINAL routing: `/t` rewrites ctx to a
+          // brand-new {thread, messageId} anchor. forceTopicApplied also suppresses
+          // the topic_alias fold below — a `/t` seed wins over alias, same
+          // precedence as the human path.
+          const forcedTopic = maybeApplyForceTopicOverride(ctx, message, messageId);
+          if (forcedTopic) {
+            logger.info(`[/t] Force-topic override (bot sender): msg=${messageId.substring(0, 12)} → thread-scope, anchor=msg`);
+          }
           const replyRootId = await maybeApplyTopicAliasSeed({
-            larkAppId, chatId, chatType, message, senderOpenId, messageId, routing: ctx,
+            larkAppId, chatId, chatType, message, senderOpenId, messageId, routing: ctx, forceTopicApplied: forcedTopic,
           });
-          // Regular-group foreign-bot @mention without an existing session:
-          // gate to vetted botmux peers (registered in our bot-openids cross-ref).
-          // This applies both to legacy chat-scope routing and to the
-          // regularGroupReplyInThread send-shape, so random Lark bots cannot
-          // silently spawn sessions in 普通群 just because this bot replies in
-          // threads. Known Bot A → Bot B handoffs in 普通群 still work.
+          // Regular-group foreign-bot @mention: gate to vetted botmux peers
+          // (registered in our bot-openids cross-ref). Fires for legacy chat-scope
+          // routing, the regularGroupReplyInThread/new-topic send-shape
+          // (decision.source === 'regular-group-thread'), AND a `/t` force-topic
+          // seed (forcedTopic) — so random Lark bots cannot silently spawn sessions
+          // in 普通群, whether this bot replies in threads or a stranger bot @s us
+          // with `/t`. Known Bot A → Bot B handoffs in 普通群 still work.
+          //
+          // ownsSession is read on ctx.anchor AFTER the `/t` override above. That
+          // exemption means "a foreign bot following up into a session we already
+          // own" (e.g. a chat-scope session at chatId). A `/t` rewrites the anchor
+          // to a fresh messageId where we own nothing, so an unvetted bot can NOT
+          // ride the existing chat-scope session's ownership to skip vetting — it
+          // must independently hit isKnownPeerBot / chatGrants / globalGrants (or
+          // this bot's own oncall chat).
           //
           // 注意 isKnownPeerBot 查的是 cross-ref（bot-openids-<appId>.json），它只
           // 收录 bots-info.json 里有名字的 bot，即本机 daemon 自己配置的 bot
@@ -1222,7 +1242,7 @@ export function startLarkEventDispatcher(larkAppId: string, larkAppSecret: strin
           // 同一存储、同一 per-chat 语义）。命中 chatGrants 的 bot 即便不在 cross-ref，
           // 也与已注册 peer 同等放行——这是「授权外部 bot 在本群协作」的入口。
           // 全局授权（globalGrants）同理：命中即在任意群放行，是上面的全局版。
-          if ((ctx.scope === 'chat' || decision.source === 'regular-group-thread') && !findOncallChat(larkAppId, chatId)) {
+          if ((ctx.scope === 'chat' || decision.source === 'regular-group-thread' || forcedTopic) && !findOncallChat(larkAppId, chatId)) {
             const ownsSession = handlers.isSessionOwner?.(ctx.anchor, larkAppId) ?? false;
             if (!ownsSession
                 && !isKnownPeerBot(config.session.dataDir, larkAppId, senderOpenId)
