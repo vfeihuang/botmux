@@ -638,3 +638,75 @@ describe('runtime CLI 白名单守卫', () => {
     }
   });
 });
+
+// ─── 跨节点回溯 A→B→C 端到端（菲菲的精确验收）────────────────────────────────
+describe('runWorkflow — 跨节点 revisit A→B→C', () => {
+  it('C#001 回溯 A → A/B/C#001 全 superseded → 重生 #002 → 仅 C#002 done run 才成功; B#002 读 A#002', async () => {
+    const base = mkdtempSync(join(tmpdir(), 'v3-rt-revisit-'));
+    try {
+      const dag = validateDag({
+        runId: 'revisit-abc',
+        nodes: [
+          { id: 'A', type: 'goal', goal: 'a', depends: [], inputs: [] },
+          { id: 'B', type: 'goal', goal: 'b', depends: ['A'], inputs: [{ from: 'A' }] },
+          // C 声明可回溯到祖先 A
+          { id: 'C', type: 'goal', goal: 'c', depends: ['B'], inputs: [{ from: 'B' }], revisitTo: ['A'] },
+        ],
+      });
+      let cRuns = 0;
+      let bSawAContent = '';
+      const runNode: RunNode = async (req) => {
+        if (req.node.id === 'A') {
+          // 第二次跑(A#002)产出不同内容,用来验证 B#002 读到的是新版
+          const content = req.attemptId.startsWith('A#002') ? 'A-v2' : 'A-v1';
+          return { status: 'ok', manifestPath: writeManifest(req, {
+            schemaVersion: 1, status: 'ok', summary: 'a', files: [product(req.outputDir, 'a.md', content)],
+          }) };
+        }
+        if (req.node.id === 'B') {
+          const inputs = JSON.parse(readFileSync(req.inputsPath, 'utf-8')) as GoalInputs;
+          const fromA = inputs.inputs.find((i) => i.from === 'A');
+          if (fromA && req.attemptId.startsWith('B#002')) bSawAContent = readFileSync(fromA.path, 'utf-8');
+          return { status: 'ok', manifestPath: writeManifest(req, {
+            schemaVersion: 1, status: 'ok', summary: 'b', files: [product(req.outputDir, 'b.md', 'B-out')],
+          }) };
+        }
+        // C: 首个 instance(C#001)写 result.json 请求回溯到 A；第二个(C#002)正常成功。
+        cRuns++;
+        if (req.attemptId.startsWith('C#001')) {
+          const rj = jsonProduct(req.outputDir, 'result.json', { status: 'revisit', revisitTo: 'A', reason: '缺计费规则' });
+          return { status: 'ok', manifestPath: writeManifest(req, {
+            schemaVersion: 1, status: 'ok', summary: 'revisit', files: [rj],
+          }) };
+        }
+        return { status: 'ok', manifestPath: writeManifest(req, {
+          schemaVersion: 1, status: 'ok', summary: 'c done', files: [product(req.outputDir, 'c.md', 'C-out')],
+        }) };
+      };
+
+      const deps: V3RuntimeDeps = { runNode, validateManifest, resolveBotSnapshot };
+      const outcome = await runWorkflow(dag, deps, { baseDir: base });
+
+      expect(outcome).toMatchObject({ reason: 'terminal', runStatus: 'succeeded' });
+      const events = readJournal(join(outcome.runDir, 'journal.ndjson'));
+
+      // C 请求了回溯到 A
+      expect(events.some((e) => e.type === 'nodeRevisitRequested' && (e as any).toNodeId === 'A')).toBe(true);
+      // A/B/C 的 #001 实例全部被 supersede（刷新）
+      expect(events.filter((e) => e.type === 'nodeInstanceSuperseded').map((e) => (e as any).instanceId).sort())
+        .toEqual(['A#001', 'B#001', 'C#001']);
+      // 重新生成 #002 三个实例
+      expect(events.filter((e) => e.type === 'nodeDispatched' && (e as any).instanceId?.endsWith('#002'))
+        .map((e) => (e as any).instanceId).sort()).toEqual(['A#002', 'B#002', 'C#002']);
+      // 只有 C#002 成功（C#001 是 revisit,不算成功终态）
+      expect(events.some((e) => e.type === 'nodeSucceeded' && (e as any).instanceId === 'C#002')).toBe(true);
+      expect(events.some((e) => e.type === 'nodeSucceeded' && (e as any).instanceId === 'C#001')).toBe(false);
+      // B#002 的 inputs 来自 A#002（新版产物），不是 A#001
+      expect(bSawAContent).toBe('A-v2');
+      // C 一共跑了 2 次（#001 回溯 + #002 成功）
+      expect(cRuns).toBe(2);
+    } finally {
+      rmSync(base, { recursive: true, force: true });
+    }
+  });
+});

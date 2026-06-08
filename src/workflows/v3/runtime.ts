@@ -242,6 +242,45 @@ export interface ResultValidation {
   problems?: string[];
 }
 
+/** Read a worker's cross-node revisit request from `result.json` (if any).  A
+ *  revisit is `{ "status": "revisit", "revisitTo": "<ancestor>", "reason"? }`.
+ *  Absent result.json / non-revisit status → `{ ok:true }` (no request).  A
+ *  malformed revisit (missing/blank revisitTo, non-string reason) → `ok:false`
+ *  so the runtime blocks it as resultInvalid.  The ancestor membership check
+ *  (toNodeId ∈ node.revisitTo) is the caller's (it has the node). */
+export function readRevisitRequest(
+  manifest: Manifest,
+  outputDir: string,
+): { ok: true; request?: { toNodeId: string; reason?: string } } | { ok: false; problems: string[] } {
+  const entry = manifest.files.find((f) => f.path === 'result.json');
+  if (!entry) return { ok: true };
+  let value: unknown;
+  try {
+    value = JSON.parse(readFileSync(join(outputDir, entry.path), 'utf-8'));
+  } catch {
+    return { ok: true }; // unreadable result.json: not a revisit (resultSchema path reports it)
+  }
+  if (!value || typeof value !== 'object' || (value as Record<string, unknown>).status !== 'revisit') {
+    return { ok: true };
+  }
+  const v = value as Record<string, unknown>;
+  const problems: string[] = [];
+  if (typeof v.revisitTo !== 'string' || v.revisitTo.trim() === '') {
+    problems.push('result.json status "revisit" requires a non-empty string "revisitTo"');
+  }
+  if (v.reason !== undefined && typeof v.reason !== 'string') {
+    problems.push('result.json "reason" must be a string when present');
+  }
+  if (problems.length > 0) return { ok: false, problems };
+  return {
+    ok: true,
+    request: {
+      toNodeId: v.revisitTo as string,
+      ...(typeof v.reason === 'string' && v.reason ? { reason: v.reason } : {}),
+    },
+  };
+}
+
 /**
  * Validate a `result.json` against the node's (already dag-validated) result
  * schema subset.  Top-level types only — see `V3ResultSchema`.  Undeclared
@@ -739,6 +778,31 @@ export async function runWorkflow(
         const manifestSaysOk = verdict.ok && verdict.manifest?.status === 'ok';
 
         if (result.status === 'ok' && manifestSaysOk) {
+          // Cross-node revisit: the worker's result.json may request a jump back
+          // to an ancestor (`status:"revisit", revisitTo, reason`).  Recognized
+          // BEFORE success/resultSchema — a revisit is not a node success.
+          const revisit = readRevisitRequest(verdict.manifest!, outputDir);
+          if (!revisit.ok) {
+            appendEvent(journalPath, {
+              type: 'nodeBlocked', nodeId: node.id, ...(instanceId ? { instanceId } : {}), attemptId,
+              errorClass: 'resultInvalid', message: revisit.problems.join('; '),
+            });
+            return;
+          }
+          if (revisit.request) {
+            if (!node.revisitTo?.includes(revisit.request.toNodeId)) {
+              appendEvent(journalPath, {
+                type: 'nodeBlocked', nodeId: node.id, ...(instanceId ? { instanceId } : {}), attemptId,
+                errorClass: 'resultInvalid',
+                message: `result.json requests revisit to "${revisit.request.toNodeId}", not in node "${node.id}".revisitTo`,
+              });
+              return;
+            }
+            // goal-node dispatches always carry instanceId (首派 #001); the
+            // fallback keeps the type total for the legacy/no-instance path.
+            appendRevisitEvents(node.id, instanceId ?? node.id, attemptId, revisit.request);
+            return;
+          }
           // Opt-in structured-result contract: the manifest MUST list a
           // `result.json` entry (so it went through the manifest validator's
           // path/hash checks like every other product), and the file must
@@ -839,6 +903,51 @@ export async function runWorkflow(
         releaseSlots(botKey, botSnap.cliId);
       });
     inFlight.set(node.id, p);
+  }
+
+  /** A node's transitive downstream cone (the node itself + every node reachable
+   *  via `depends` edges).  The set a revisit to `root` must refresh: `root`'s
+   *  product changed, so every result derived from it is stale. */
+  function affectedNodesFrom(root: string): string[] {
+    const reachable = new Set<string>([root]);
+    let changed = true;
+    while (changed) {
+      changed = false;
+      for (const n of dag.nodes) {
+        if (reachable.has(n.id)) continue;
+        if (n.depends.some((d) => reachable.has(d.from))) {
+          reachable.add(n.id);
+          changed = true;
+        }
+      }
+    }
+    return [...reachable];
+  }
+
+  /** A worker requested a cross-node revisit to ancestor `toNodeId`: journal the
+   *  request, then supersede the CURRENT effective instance of the target AND its
+   *  whole downstream cone (mark-only, files kept).  materialize then drops their
+   *  effectiveInstanceId → decideNext re-dispatches fresh `#NNN` instances. */
+  function appendRevisitEvents(
+    nodeId: string,
+    instanceId: string,
+    attemptId: string,
+    request: { toNodeId: string; reason?: string },
+  ): void {
+    appendEvent(journalPath, {
+      type: 'nodeRevisitRequested',
+      nodeId, instanceId, attemptId, toNodeId: request.toNodeId,
+      ...(request.reason ? { reason: request.reason } : {}),
+    });
+    const snap = materialize(readJournal(journalPath));
+    for (const affectedNodeId of affectedNodesFrom(request.toNodeId)) {
+      const eff = snap.nodes.get(affectedNodeId)?.effectiveInstanceId;
+      if (!eff) continue; // never-dispatched downstream node has nothing to supersede
+      appendEvent(journalPath, {
+        type: 'nodeInstanceSuperseded',
+        nodeId: affectedNodeId, instanceId: eff, byNodeId: request.toNodeId, reason: 'refresh',
+      });
+    }
   }
 
   function startGate(node: V3Node, instanceId?: string): void {
