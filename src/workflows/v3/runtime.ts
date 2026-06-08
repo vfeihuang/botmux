@@ -844,6 +844,9 @@ export async function runWorkflow(
   function startGate(node: V3Node, instanceId?: string): void {
     const waitId = `${node.id}-gate`; // MVP: one gate per node
     const gate = normalizeGateWaitInput(node.humanGate!);
+    // gateDispatched carries instanceId (journal layer, accepted in 3239cf8);
+    // DEFERRED: instance-level waitId + stale-card guard (菲菲 review) — needs a
+    // waitId migration / card-action change, off the A→B→C critical path.
     appendEvent(journalPath, { type: 'gateDispatched', nodeId: node.id, ...(instanceId ? { instanceId } : {}), waitId });
 
     if (gateMode === 'suspend') {

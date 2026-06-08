@@ -19,7 +19,7 @@ import {
   DagValidationError,
   type V3Dag,
 } from '../src/workflows/v3/dag.js';
-import { decideNext, findSinks, type V3RunState } from '../src/workflows/v3/orchestrator.js';
+import { decideNext, findSinks, type V3RunState, type V3EdgeRunState } from '../src/workflows/v3/orchestrator.js';
 import { appendEvent, readJournal } from '../src/workflows/v3/journal.js';
 import { materialize, writeState, readState } from '../src/workflows/v3/state.js';
 
@@ -174,6 +174,24 @@ describe('decideNext', () => {
 
   it('findSinks 找到末端节点', () => {
     expect(findSinks(dag)).toEqual(['summarize']);
+  });
+
+  it('回溯不复用旧条件边 verdict（verdict 绑 source effective instance）', () => {
+    const branch = validateDag({
+      runId: 'b',
+      nodes: [
+        { id: 'judge', type: 'goal', goal: 'j', depends: [], inputs: [],
+          resultSchema: { type: 'object', properties: { decision: { type: 'string', enum: ['pass', 'fail'] } }, required: ['decision'] } },
+        { id: 'pass', type: 'goal', goal: 'p', depends: [{ from: 'judge', when: { path: 'result.decision', equals: 'pass' } }], inputs: [] },
+      ],
+    });
+    // judge 旧实例 #001 的条件边 verdict=active 仍在 edges 里。
+    const edges: V3EdgeRunState = new Map([['judge#001->pass', { active: true, sourceAttemptId: 'judge#001/attempts/001' }]]);
+    // judge 被回溯刷新：effective 现在是 #002（新实例已成功）。
+    const state: V3RunState = new Map([['judge', { status: 'done', effectiveInstanceId: 'judge#002' }]]);
+    // pass 的 readiness 必须查 `judge#002->pass`（未解析）→ 重新 resolveEdge，
+    // 绝不复用 `judge#001->pass` 的 active verdict（菲菲 review #2）。
+    expect(decideNext(branch, state, new Map(), edges)).toEqual([{ kind: 'resolveEdge', from: 'judge', to: 'pass' }]);
   });
 
   it('条件边 unresolved → 先 resolveEdge，不派下游', () => {

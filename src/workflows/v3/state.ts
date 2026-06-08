@@ -232,11 +232,15 @@ export function materialize(events: StoredEvent[]): V3RunSnapshot {
         break;
       }
       case 'edgeResolved': {
-        // Key by instance pair (constraint 1): `A#001->B#001` and `A#002->B#002`
-        // are distinct verdicts — a revisit's fresh edge is never first-wins-
-        // shadowed by the superseded instance's old verdict.  Legacy/no-instance
-        // events fall back to the nodeId pair.
-        const key = `${e.fromInstanceId ?? e.from}->${e.toInstanceId ?? e.to}`;
+        // Verdict is bound to the SOURCE effective instance only (菲菲 review):
+        // the edge resolves BEFORE the target dispatches, so the target has no
+        // instance yet — key is `<sourceInstance>-><targetNodeId>`.  This makes
+        // `A#001->B` and `A#002->B` distinct, so a SOURCE revisit's fresh verdict
+        // is never first-wins-shadowed by the superseded one.  KNOWN LIMITATION:
+        // a TARGET-only revisit (B refreshed, A unchanged) reuses `A#001->B` — to
+        // be upgraded when target-specific edge semantics actually arise.
+        // `toInstanceId` stays on the event as record-only, NOT part of the key.
+        const key = `${e.fromInstanceId ?? e.from}->${e.to}`;
         if (!edges.has(key)) {
           edges.set(key, { active: e.active, sourceAttemptId: e.sourceAttemptId });
         }

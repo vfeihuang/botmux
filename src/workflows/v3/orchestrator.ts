@@ -400,14 +400,15 @@ function firstUnresolved(activities: EdgeActivity[]): Extract<EdgeActivity, { ki
   return activities.find((a): a is Extract<EdgeActivity, { kind: 'unresolved' }> => a.kind === 'unresolved');
 }
 
-/** The edge key for the CURRENT effective instances of source/target — must
- *  mirror the key materialize stores edgeResolved under (constraint 1), so a
- *  revisit's `A#002->B#002` reads its OWN verdict, not `A#001->B#001`'s.
- *  Falls back to the nodeId pair when a node has no runtime instance. */
+/** The edge key for the source's CURRENT effective instance — mirrors the key
+ *  materialize stores edgeResolved under (verdict bound to SOURCE instance, 菲菲
+ *  review).  A source revisit (`A#001`→`A#002`) reads a fresh `A#002->B`, never
+ *  the superseded `A#001->B`.  Target is keyed by nodeId (it has no instance at
+ *  edge-resolve time); a target-only revisit reusing the verdict is a known,
+ *  documented limitation. */
 function currentEdgeKey(from: string, to: string, state: V3RunState): string {
   const fromInst = st(state, from).effectiveInstanceId ?? from;
-  const toInst = st(state, to).effectiveInstanceId ?? to;
-  return `${fromInst}->${toInst}`;
+  return `${fromInst}->${to}`;
 }
 
 /** The CURRENT iteration's expanded instance ids of a loop node (empty for
