@@ -34,7 +34,7 @@ import { sessionKey, sessionAnchorId, frozenDisplayMode } from '../../core/types
 import type { DaemonSession } from '../../core/types.js';
 import { buildTerminalUrl } from '../../core/terminal-url.js';
 import type { ProjectInfo } from '../../services/project-scanner.js';
-import { t, localeForBot, isLocale } from '../../i18n/index.js';
+import { t, localeForBot, isLocale, type Locale } from '../../i18n/index.js';
 
 // ─── Types ────────────────────────────────────────────────────────────────
 
@@ -75,12 +75,11 @@ const voicedCardIds = new Set<string>();
 // Instruction injected into the session when the voice button is clicked. The
 // model (which still has its just-sent reply in context) condenses it into
 // spoken prose and emits it via `botmux send --voice`. Kept terse and explicit
-// so the model produces ONE voice bubble and no stray text card.
-const VOICE_SUMMARY_INSTRUCTION =
-  '🔊【语音总结请求】把你上一条发给用户的回复，精简成不超过 5 句、适合朗读的口语：' +
-  '去掉代码、命令、文件路径、URL、英文缩写和 markdown 标记，只讲结论，第一句直接进正题。' +
-  '然后调用 `botmux send --voice "<精简后的口语>"` 把它作为语音发出来。' +
-  '只发这一条语音，不要再额外发文字说明。';
+// so the model produces ONE voice bubble and no stray text card. Resolved per
+// the bot's locale so an English-mode bot gets the English instruction.
+function voiceSummaryInstruction(locale?: Locale): string {
+  return t('card.voice.summary_instruction', undefined, locale);
+}
 
 function isLegacySelfHealAction(actionType?: string): boolean {
   return !!actionType && LEGACY_SELF_HEAL_ACTIONS.has(actionType);
@@ -177,10 +176,10 @@ export async function handleCardAction(data: CardActionData, deps: CardHandlerDe
     const sid: string = value.sessionId;
     const wd: string = value.workingDir;
     if (!sid || !wd) return JSON.parse(buildLandResultCard('failed', t('card.land.stale', undefined, loc), loc));
-    const d = computeSandboxDiff(config.session.dataDir, sid);
+    const d = computeSandboxDiff(config.session.dataDir, sid, loc);
     if (!d.ok) return JSON.parse(buildLandResultCard('failed', d.error, loc));
     if (d.empty) return JSON.parse(buildLandResultCard('discarded', '', loc));
-    const a = applySandboxDiff(wd, d.patch);
+    const a = applySandboxDiff(wd, d.patch, loc);
     if (!a.ok) return JSON.parse(buildLandResultCard('failed', a.error, loc));
     logger.info(`Land applied: ${d.files} files (+${d.insertions}/-${d.deletions}) → ${wd}`);
     return JSON.parse(buildLandResultCard('applied', t('card.land.applied_body', { files: d.files, ins: d.insertions, del: d.deletions, dir: wd }, loc), loc));
@@ -663,7 +662,8 @@ export async function handleCardAction(data: CardActionData, deps: CardHandlerDe
   }
 
   if (isWorkflowApprovalAction(value?.action)) {
-    const result = await handleWorkflowApprovalAction(data, deps.workflowApprovalDeps);
+    const locWf = localeForBot(larkAppId);
+    const result = await handleWorkflowApprovalAction(data, deps.workflowApprovalDeps, locWf);
     const runId = value?.run_id;
     if (result?.ok && !result.duplicate && runId) {
       await deps.workflowApprovalResolved?.(runId);
@@ -671,7 +671,7 @@ export async function handleCardAction(data: CardActionData, deps: CardHandlerDe
     // Non-approver: surface a toast so the clicker knows nothing happened
     // (instead of silently leaving the buttons active).
     if (result && !result.ok && result.error === 'not_approver') {
-      return { toast: { type: 'warning', content: '你不在该审批人名单里，无法操作' } };
+      return { toast: { type: 'warning', content: t('toast.not_in_approver_list', undefined, locWf) } };
     }
     // Successful resolve / reject / cancel: replace the clicked card with a
     // frozen "已通过/已拒绝/已取消" body so the buttons can't be re-submitted
@@ -717,9 +717,9 @@ export async function handleCardAction(data: CardActionData, deps: CardHandlerDe
       voicedCardIds.add(dedupeKey);
       if (voicedCardIds.size > 5000) { voicedCardIds.clear(); voicedCardIds.add(dedupeKey); }
       if (ds.worker && !ds.worker.killed) {
-        ds.worker.send({ type: 'message', content: VOICE_SUMMARY_INSTRUCTION } as DaemonToWorker);
+        ds.worker.send({ type: 'message', content: voiceSummaryInstruction(locDs) } as DaemonToWorker);
       } else {
-        forkWorker(ds, VOICE_SUMMARY_INSTRUCTION, ds.hasHistory);
+        forkWorker(ds, voiceSummaryInstruction(locDs), ds.hasHistory);
       }
       logger.info(`[${tag(ds)}] voice_summary triggered by ${operatorOpenId ?? '?'}`);
       return { toast: { type: 'success', content: t('card.voice.toast_wait', undefined, locDs) } };

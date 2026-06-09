@@ -13,6 +13,7 @@ import { execFileSync } from 'node:child_process';
 import { existsSync, readFileSync, writeFileSync, mkdtempSync, rmSync } from 'node:fs';
 import { join, dirname } from 'node:path';
 import { tmpdir } from 'node:os';
+import { t, type Locale } from '../i18n/index.js';
 
 export interface LandDiff {
   ok: true;
@@ -30,10 +31,10 @@ function cloneDir(dataDir: string, sessionId: string): string {
 }
 
 /** Compute the agent's changes in the session's sandbox clone vs the clone base. */
-export function computeSandboxDiff(dataDir: string, sessionId: string): LandDiff | LandError {
+export function computeSandboxDiff(dataDir: string, sessionId: string, locale?: Locale): LandDiff | LandError {
   const clone = cloneDir(dataDir, sessionId);
-  if (!existsSync(clone)) return { ok: false, error: '该会话没有沙盒副本（未开沙盒，或副本已清理）' };
-  if (!existsSync(join(clone, '.git'))) return { ok: false, error: '沙盒副本不是 git 仓库，暂不支持 diff 落盘' };
+  if (!existsSync(clone)) return { ok: false, error: t('sandbox.no_clone', undefined, locale) };
+  if (!existsSync(join(clone, '.git'))) return { ok: false, error: t('sandbox.clone_not_git', undefined, locale) };
   const baseFile = join(dirname(clone), 'clone-base');
   const base = existsSync(baseFile) ? readFileSync(baseFile, 'utf8').trim() : 'HEAD';
   try {
@@ -52,14 +53,14 @@ export function computeSandboxDiff(dataDir: string, sessionId: string): LandDiff
       deletions: Number(shortstat.match(/(\d+) deletion/)?.[1] ?? 0),
     };
   } catch (e: any) {
-    return { ok: false, error: `git diff 失败：${(e?.stderr ?? e?.message ?? e).toString().slice(0, 300)}` };
+    return { ok: false, error: t('sandbox.diff_failed', { detail: (e?.stderr ?? e?.message ?? e).toString().slice(0, 300) }, locale) };
   }
 }
 
 /** Apply a sandbox patch onto the real target repo (the session's workingDir). */
-export function applySandboxDiff(targetDir: string, patch: string): { ok: true } | LandError {
-  if (!patch.trim()) return { ok: false, error: '没有改动可落盘' };
-  if (!existsSync(join(targetDir, '.git'))) return { ok: false, error: `落盘目标不是 git 仓库：${targetDir}` };
+export function applySandboxDiff(targetDir: string, patch: string, locale?: Locale): { ok: true } | LandError {
+  if (!patch.trim()) return { ok: false, error: t('sandbox.nothing_to_land', undefined, locale) };
+  if (!existsSync(join(targetDir, '.git'))) return { ok: false, error: t('sandbox.target_not_git', { dir: targetDir }, locale) };
   const dir = mkdtempSync(join(tmpdir(), 'sbx-land-'));
   const patchFile = join(dir, 'changes.patch');
   writeFileSync(patchFile, patch);
@@ -72,7 +73,7 @@ export function applySandboxDiff(targetDir: string, patch: string): { ok: true }
       execFileSync('git', ['-C', targetDir, 'apply', '--whitespace=nowarn', patchFile], { stdio: 'pipe' });
       return { ok: true };
     } catch (e2: any) {
-      return { ok: false, error: `git apply 失败（可能与当前仓库状态冲突，需手动合并）：${(e2?.stderr ?? e2?.message ?? e2).toString().slice(0, 400)}` };
+      return { ok: false, error: t('sandbox.apply_failed', { detail: (e2?.stderr ?? e2?.message ?? e2).toString().slice(0, 400) }, locale) };
     }
   } finally {
     try { rmSync(dir, { recursive: true, force: true }); } catch { /* */ }

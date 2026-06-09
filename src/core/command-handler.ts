@@ -862,7 +862,7 @@ export async function handleCommand(
         const sid = ds.session.sessionId;
         const wd = ds.session.workingDir;
         if (!wd) { await sessionReply(rootId, t('cmd.land.no_workingdir', undefined, loc)); break; }
-        const d = computeSandboxDiff(config.session.dataDir, sid);
+        const d = computeSandboxDiff(config.session.dataDir, sid, loc);
         if (!d.ok) { await sessionReply(rootId, t('cmd.land.cannot', { error: d.error }, loc)); break; }
         if (d.empty) { await sessionReply(rootId, t('cmd.land.empty', undefined, loc)); break; }
         const lines = d.patch.split('\n');

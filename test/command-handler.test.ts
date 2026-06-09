@@ -463,7 +463,7 @@ describe('DAEMON_COMMANDS set', () => {
   });
 
   it('should have the correct size', () => {
-    expect(DAEMON_COMMANDS.size).toBe(21);
+    expect(DAEMON_COMMANDS.size).toBe(22);
   });
 
   it('contains the /list-slash-command lister and its /slash alias', () => {

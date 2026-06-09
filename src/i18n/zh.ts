@@ -579,4 +579,130 @@ export const messages: Record<string, string> = {
   'daemon.cmd_needs_active_cli': '{cmd} 需要活跃的 CLI 进程，当前话题无运行中的会话。',
   'daemon.enriched_mentions_label': '消息中的 @mention：',
   'daemon.choose_repo_first': '请先在上方卡片中选择仓库，您的消息已暂存，选择后会自动发送。',
+
+  // ─── i18n coverage v2: shared fragments + cards + chat messages ───────────
+  'common.operator': '操作人：{by}',
+  'common.empty_paren': '（空）',
+  'common.truncated_short': '…（已截断）',
+
+  // Workflow approval card
+  'card.wf.none': '无',
+  'card.wf.title_pending': '需要审批：{node}',
+  'card.wf.title_resolved': '{prefix}：{node}',
+  'card.wf.review_content': '审批内容',
+  'card.wf.review_preview_suffix': '（预览，完整内容见下方 Web 详情）',
+  'card.wf.comment_placeholder': '可选：填写审批意见',
+  'card.wf.btn_approve': '✅ 通过',
+  'card.wf.btn_reject': '❌ 拒绝',
+  'card.wf.btn_cancel_run': '取消 Run',
+  'card.wf.btn_web_detail': 'Web 详情',
+  'card.wf.resolved.approved': '已通过',
+  'card.wf.resolved.rejected': '已拒绝',
+  'card.wf.resolved.cancelled': '已取消',
+  'card.wf.banner.approved': '✅ 已通过',
+  'card.wf.banner.rejected': '❌ 已拒绝',
+  'card.wf.banner.cancelled': '🛑 已取消',
+  'card.wf.comment_label': '备注：{comment}',
+  'card.wf.truncated': '…（已截断，完整内容请在 Web 查看）',
+
+  // Workflow progress card
+  'card.wf.field.status': '状态',
+  'card.wf.field.progress': '进度',
+  'card.wf.field.failed': '失败',
+  'card.wf.progress_value': '{done} / {total} 节点完成',
+  'card.wf.section.running': '进行中',
+  'card.wf.section.waiting': '等待审批',
+  'card.wf.section.loop': '循环节点',
+  'card.wf.failure_summary': '失败摘要',
+  'card.wf.terminal.live': '查看当前终端',
+  'card.wf.terminal.log': '查看执行日志',
+  'card.wf.usage': '用法：/workflow run <id> [key=value ...]\n或：/workflow cancel <runId>',
+  'wf.err.missing_run_id': '缺少 runId',
+  'wf.err.cancel_only_run_id': '/workflow cancel 只接受 runId',
+  'wf.err.run_id_charset': 'runId 只能包含字母、数字、下划线、点和短横线',
+  'wf.err.unknown_subcommand': '只支持 /workflow run / cancel 子命令',
+  'wf.err.missing_workflow_id': '缺少 workflow id',
+  'wf.err.workflow_id_charset': 'workflow id 只能包含字母、数字、下划线、点和短横线',
+  'wf.err.param_format': '参数必须是 key=value 形式：{token}',
+  'wf.err.param_name_charset': '参数名只能包含字母、数字、下划线、点和短横线：{key}',
+  'wf.err.duplicate_param': '重复参数：{key}',
+  'wf.cmd_failed': 'Workflow 命令失败：{error}',
+
+  // Ask card
+  'card.ask.field.deadline': '截止',
+  'card.ask.field.answerable': '可答复',
+  'card.ask.question_n': '问题 {n}',
+  'card.ask.submit': '提交',
+  'card.ask.custom_reply_hint': '💬 选项都不合适？直接在话题里回复你的答案即可。',
+  'card.ask.title': 'botmux ask',
+  'card.ask.title_done': 'botmux ask 已结束',
+  'card.ask.toast.unauthorized': '你没有权限回答这个 ask',
+  'card.ask.toast.already_settled': '这个 ask 已经被回答或结束',
+  'card.ask.toast.stale': '⚠️ 此 ask 已失效',
+  'card.ask.custom_reply': '自定义回复',
+  'card.ask.q_summary_line': '问题{n}：{labels}',
+  'card.ask.q_unparseable': '问题{n}：（无法解析）',
+  'card.ask.selected': '已选择',
+  'card.ask.supplement': '补充：{comment}',
+  'card.ask.timed_out': '超时未答',
+  'card.ask.invalidated': '已失效',
+  'card.ask.no_approver': '无可用答复人',
+
+  // Voice summary instruction (injected into the model session)
+  'card.voice.summary_instruction': '🔊【语音总结请求】把你上一条发给用户的回复，精简成不超过 5 句、适合朗读的口语：去掉代码、命令、文件路径、URL、英文缩写和 markdown 标记，只讲结论，第一句直接进正题。然后调用 `botmux send --voice "<精简后的口语>"` 把它作为语音发出来。只发这一条语音，不要再额外发文字说明。',
+
+  // Card action toasts (dedupe / in-flight / approver gate)
+  'toast.action_received_no_repeat': '操作已收到，请勿重复点击',
+  'toast.action_in_progress': '操作正在处理中，请稍候',
+  'toast.action_received_bg': '操作已收到，后台处理中',
+  'toast.not_in_approver_list': '你不在该审批人名单里，无法操作',
+
+  // Quote hint (injected into the CLI prompt)
+  'prompt.quote_hint': '[用户引用了消息 用 botmux quoted {id} 查看]',
+
+  // Markdown / contextual reply card chrome
+  'card.you': '你',
+  'card.sent_to': '发送给：',
+
+  // Adopt preamble card title
+  'card.adopt_last_round': '📜 /adopt 前最后一轮',
+  'card.local_turn_resumed': '🖥️ 终端本地对话续传（daemon 重启时模型正在输出）',
+  'card.local_turn': '🖥️ 终端本地对话（在 adopted pane 中直接输入，已同步至飞书）',
+
+  // Scheduler announcements
+  'scheduler.task_started': '🕐 定时任务「{name}」开始执行',
+  'scheduler.task_triggered_target_chat': '🕐 定时任务「{name}」已在目标群聊触发',
+  'scheduler.task_triggered_target_thread': '🕐 定时任务「{name}」已在目标话题触发',
+
+  // External event trigger seed
+  'trigger.external_event': '外部事件触发：{source}',
+
+  // Worker-side submit / notify messages
+  'worker.submit_impossible': '⚠️ 刚才那条消息没有写入 {cliName}，因为当前按键配置无法从终端自动提交。\n原因：{reason}\n请调整 Claude Code Chat keybinding 后重发。\n开头：{preview}',
+  'worker.submit_unconfirmed': '⚠️ 刚才那条消息发给 {cliName} 后没能确认提交（重试 Enter 后等了 {secs}s 仍未在{transcriptLabel}里看到新记录）。可能卡在输入框里——请去 Web 终端看一下，手动按 Enter 或重发。\n开头：{preview}',
+  'worker.coco_session_dir_gone': '⚠️ 当前 CoCo 进程的会话目录已被删除（可能是 e2e 测试清理或手动 rm），写到 events.jsonl 的内容会落到一个失效 inode 上，桥接读不到。请重启 CoCo 后重新 /adopt。',
+
+  // Restart / maintenance report (bot-0 DM to owner)
+  'restart.updated_restarted': '🔄 **botmux 已更新并重启**',
+  'restart.restarted': '🔄 **botmux 已重启**',
+  'restart.version_delta': '版本：{old} → {new}',
+  'restart.version': '版本：{version}',
+  'restart.unfinished_sessions': '未结束会话：{count} 个',
+  'restart.dashboard': 'Dashboard：{url}',
+  'restart.changelog_label': '更新内容：',
+  'restart.changelog_link_fallback': '详情：{url}',
+  'restart.card_title': 'botmux 维护通知',
+
+  // Auto-start (joined chat) member-read failure admin DM
+  'daemon.auto_start_member_read_failed': '⚠️ botmux「被拉进新群自动开工」已开启，但读取群成员失败，无法判断群里是否有授权用户，自动开工被跳过。\n\n最可能原因：缺少读取群成员的权限（im:chat / 群信息读取），或没有订阅「机器人进群」事件 `im.chat.member.bot.added_v1`。\n\n请到飞书开放平台 → 应用 → 权限管理 / 事件订阅 里补齐，然后 `botmux restart`。\n\n错误详情：{detail}',
+
+  // Sandbox landing (/land) errors
+  'sandbox.no_clone': '该会话没有沙盒副本（未开沙盒，或副本已清理）',
+  'sandbox.clone_not_git': '沙盒副本不是 git 仓库，暂不支持 diff 落盘',
+  'sandbox.nothing_to_land': '没有改动可落盘',
+  'sandbox.target_not_git': '落盘目标不是 git 仓库：{dir}',
+  'sandbox.apply_failed': 'git apply 失败（可能与当前仓库状态冲突，需手动合并）：{detail}',
+  'sandbox.diff_failed': 'git diff 失败：{detail}',
+  'sandbox.workingdir_not_found': '找不到会话 workingDir',
+  'sandbox.no_changes_left': '沙盒副本已无改动',
 };

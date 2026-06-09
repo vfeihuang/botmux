@@ -1972,12 +1972,13 @@ function setupWorkerHandlers(ds: DaemonSession, worker: ChildProcess): void {
         if (!msg.userText.trim() && !msg.assistantText.trim()) break;
         const recipientOpenId = daemonCardFooterRecipientOpenId(ds);
         const cardJson = buildContextualReplyCard({
-          title: '📜 /adopt 前最后一轮',
+          title: tr('card.adopt_last_round', undefined, localeForBot(ds.larkAppId)),
           userText: msg.userText,
           assistantText: msg.assistantText,
           assistantLabel: getCliDisplayName(effectiveCliId),
           recipientOpenId,
           brand: resolveBrandLabel(ds.larkAppId),
+          locale: localeForBot(ds.larkAppId),
         });
         scopedReply(cardJson, 'interactive', msg.turnId).catch((err: any) => {
           logger.warn(`[${t}] Failed to deliver adopt_preamble to Lark: ${err.message}`);
@@ -2062,15 +2063,16 @@ function deliverFinalOutput(
       const cardJson = msg.kind === 'local-turn' || msg.kind === 'local-turn-headless'
         ? buildContextualReplyCard({
             title: msg.kind === 'local-turn-headless'
-              ? '🖥️ 终端本地对话续传（daemon 重启时模型正在输出）'
-              : '🖥️ 终端本地对话（在 adopted pane 中直接输入，已同步至飞书）',
+              ? tr('card.local_turn_resumed', undefined, localeForBot(ds.larkAppId))
+              : tr('card.local_turn', undefined, localeForBot(ds.larkAppId)),
             userText: msg.kind === 'local-turn' ? msg.userText ?? '' : undefined,
             assistantText: msg.content,
             assistantLabel: getCliDisplayName(effectiveCliId),
             recipientOpenId,
             brand: resolveBrandLabel(ds.larkAppId),
+            locale: localeForBot(ds.larkAppId),
           })
-        : buildMarkdownCard(msg.content, recipientOpenId, resolveBrandLabel(ds.larkAppId));
+        : buildMarkdownCard(msg.content, recipientOpenId, resolveBrandLabel(ds.larkAppId), localeForBot(ds.larkAppId));
 
       pendingCardId = lockedPendingCardId ?? claimPendingResponseCard(ds.session);
       pendingQuoteTargetId = lockedQuoteTargetId ?? ds.session.quoteTargetId;

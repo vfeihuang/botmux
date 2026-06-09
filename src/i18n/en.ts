@@ -576,4 +576,130 @@ export const messages: Record<string, string> = {
   'daemon.cmd_needs_active_cli': '{cmd} needs an active CLI process; no running session in this topic.',
   'daemon.enriched_mentions_label': '@mentions in this message:',
   'daemon.choose_repo_first': 'Pick a repo from the card above first — your message is queued and will be sent once a repo is chosen.',
+
+  // ─── i18n coverage v2: shared fragments + cards + chat messages ───────────
+  'common.operator': 'By: {by}',
+  'common.empty_paren': '(empty)',
+  'common.truncated_short': '…(truncated)',
+
+  // Workflow approval card
+  'card.wf.none': 'None',
+  'card.wf.title_pending': 'Approval needed: {node}',
+  'card.wf.title_resolved': '{prefix}: {node}',
+  'card.wf.review_content': 'Review content',
+  'card.wf.review_preview_suffix': ' (preview; full text in Web details below)',
+  'card.wf.comment_placeholder': 'Optional: add a review comment',
+  'card.wf.btn_approve': '✅ Approve',
+  'card.wf.btn_reject': '❌ Reject',
+  'card.wf.btn_cancel_run': 'Cancel run',
+  'card.wf.btn_web_detail': 'Web details',
+  'card.wf.resolved.approved': 'Approved',
+  'card.wf.resolved.rejected': 'Rejected',
+  'card.wf.resolved.cancelled': 'Cancelled',
+  'card.wf.banner.approved': '✅ Approved',
+  'card.wf.banner.rejected': '❌ Rejected',
+  'card.wf.banner.cancelled': '🛑 Cancelled',
+  'card.wf.comment_label': 'Note: {comment}',
+  'card.wf.truncated': '…(truncated; view the full text on the Web)',
+
+  // Workflow progress card
+  'card.wf.field.status': 'Status',
+  'card.wf.field.progress': 'Progress',
+  'card.wf.field.failed': 'Failed',
+  'card.wf.progress_value': '{done} / {total} nodes done',
+  'card.wf.section.running': 'Running',
+  'card.wf.section.waiting': 'Awaiting approval',
+  'card.wf.section.loop': 'Loop nodes',
+  'card.wf.failure_summary': 'Failure summary',
+  'card.wf.terminal.live': 'View live terminal',
+  'card.wf.terminal.log': 'View execution log',
+  'card.wf.usage': 'Usage: /workflow run <id> [key=value ...]\nor: /workflow cancel <runId>',
+  'wf.err.missing_run_id': 'Missing runId',
+  'wf.err.cancel_only_run_id': '/workflow cancel only accepts a runId',
+  'wf.err.run_id_charset': 'runId may only contain letters, digits, underscore, dot and hyphen',
+  'wf.err.unknown_subcommand': 'Only /workflow run / cancel subcommands are supported',
+  'wf.err.missing_workflow_id': 'Missing workflow id',
+  'wf.err.workflow_id_charset': 'workflow id may only contain letters, digits, underscore, dot and hyphen',
+  'wf.err.param_format': 'Parameters must be key=value: {token}',
+  'wf.err.param_name_charset': 'Parameter names may only contain letters, digits, underscore, dot and hyphen: {key}',
+  'wf.err.duplicate_param': 'Duplicate parameter: {key}',
+  'wf.cmd_failed': 'Workflow command failed: {error}',
+
+  // Ask card
+  'card.ask.field.deadline': 'Deadline',
+  'card.ask.field.answerable': 'Can answer',
+  'card.ask.question_n': 'Question {n}',
+  'card.ask.submit': 'Submit',
+  'card.ask.custom_reply_hint': '💬 None of the options fit? Just reply with your answer in this topic.',
+  'card.ask.title': 'botmux ask',
+  'card.ask.title_done': 'botmux ask · done',
+  'card.ask.toast.unauthorized': "You're not allowed to answer this ask",
+  'card.ask.toast.already_settled': 'This ask was already answered or closed',
+  'card.ask.toast.stale': '⚠️ This ask is no longer valid',
+  'card.ask.custom_reply': 'Custom reply',
+  'card.ask.q_summary_line': 'Q{n}: {labels}',
+  'card.ask.q_unparseable': 'Q{n}: (unparseable)',
+  'card.ask.selected': 'Selected',
+  'card.ask.supplement': 'Note: {comment}',
+  'card.ask.timed_out': 'Timed out, no answer',
+  'card.ask.invalidated': 'No longer valid',
+  'card.ask.no_approver': 'No eligible responders',
+
+  // Voice summary instruction (injected into the model session)
+  'card.voice.summary_instruction': '🔊 [Voice summary request] Condense your last reply to the user into spoken prose of at most 5 sentences suitable for reading aloud: drop code, commands, file paths, URLs, English abbreviations and markdown; state only the conclusions, and get to the point in the first sentence. Then call `botmux send --voice "<the condensed spoken text>"` to send it as voice. Send only this one voice message — no extra text.',
+
+  // Card action toasts (dedupe / in-flight / approver gate)
+  'toast.action_received_no_repeat': 'Action received — please don’t click again',
+  'toast.action_in_progress': 'Action in progress — please wait',
+  'toast.action_received_bg': 'Action received — processing in the background',
+  'toast.not_in_approver_list': 'You’re not on the approver list — no action taken',
+
+  // Quote hint (injected into the CLI prompt)
+  'prompt.quote_hint': '[User quoted a message — run `botmux quoted {id}` to view it]',
+
+  // Markdown / contextual reply card chrome
+  'card.you': 'You',
+  'card.sent_to': 'Sent to: ',
+
+  // Adopt preamble card title
+  'card.adopt_last_round': '📜 Last exchange before /adopt',
+  'card.local_turn_resumed': '🖥️ Local terminal turn resumed (model was mid-output during the daemon restart)',
+  'card.local_turn': '🖥️ Local terminal turn (typed directly in the adopted pane, synced to Lark)',
+
+  // Scheduler announcements
+  'scheduler.task_started': '🕐 Scheduled task “{name}” started',
+  'scheduler.task_triggered_target_chat': '🕐 Scheduled task “{name}” triggered in the target chat',
+  'scheduler.task_triggered_target_thread': '🕐 Scheduled task “{name}” triggered in the target topic',
+
+  // External event trigger seed
+  'trigger.external_event': 'External event: {source}',
+
+  // Worker-side submit / notify messages
+  'worker.submit_impossible': '⚠️ Your last message was NOT delivered to {cliName}: the current keybinding config can’t auto-submit from the terminal.\nReason: {reason}\nAdjust the Claude Code Chat keybinding, then resend.\nStart: {preview}',
+  'worker.submit_unconfirmed': '⚠️ Your last message was sent to {cliName} but submission couldn’t be confirmed (after retrying Enter and waiting {secs}s, no new entry showed up in {transcriptLabel}). It may be stuck in the input box — check the Web terminal and press Enter manually or resend.\nStart: {preview}',
+  'worker.coco_session_dir_gone': '⚠️ The current CoCo session directory was deleted (e2e cleanup or a manual rm). Content written to events.jsonl lands on a stale inode the bridge can’t read. Restart CoCo and run /adopt again.',
+
+  // Restart / maintenance report (bot-0 DM to owner)
+  'restart.updated_restarted': '🔄 **botmux updated & restarted**',
+  'restart.restarted': '🔄 **botmux restarted**',
+  'restart.version_delta': 'Version: {old} → {new}',
+  'restart.version': 'Version: {version}',
+  'restart.unfinished_sessions': 'Unfinished sessions: {count}',
+  'restart.dashboard': 'Dashboard: {url}',
+  'restart.changelog_label': 'What’s new:',
+  'restart.changelog_link_fallback': 'Details: {url}',
+  'restart.card_title': 'botmux maintenance notice',
+
+  // Auto-start (joined chat) member-read failure admin DM
+  'daemon.auto_start_member_read_failed': '⚠️ botmux “auto-start when added to a new chat” is on, but reading the chat members failed, so it can’t tell whether any authorized user is present — auto-start was skipped.\n\nMost likely cause: missing permission to read chat members (im:chat / chat info), or the “bot added to chat” event `im.chat.member.bot.added_v1` isn’t subscribed.\n\nGo to the Lark Open Platform → your app → Permissions / Event subscriptions to add them, then `botmux restart`.\n\nDetails: {detail}',
+
+  // Sandbox landing (/land) errors
+  'sandbox.no_clone': 'This session has no sandbox copy (sandbox off, or the copy was cleaned up).',
+  'sandbox.clone_not_git': 'The sandbox copy isn’t a git repo; diff landing isn’t supported yet.',
+  'sandbox.nothing_to_land': 'No changes to land.',
+  'sandbox.target_not_git': 'Landing target isn’t a git repo: {dir}',
+  'sandbox.apply_failed': 'git apply failed (may conflict with the current repo state; manual merge needed): {detail}',
+  'sandbox.diff_failed': 'git diff failed: {detail}',
+  'sandbox.workingdir_not_found': 'Session workingDir not found',
+  'sandbox.no_changes_left': 'The sandbox copy has no changes left',
 };

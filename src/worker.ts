@@ -40,6 +40,7 @@ import { createServer as createHttpServer, type IncomingMessage } from 'node:htt
 import { WebSocketServer, WebSocket } from 'ws';
 import { listenWebTerminalWithFallback } from './utils/web-terminal-listen.js';
 import type { DaemonToWorker, WorkerToDaemon, DisplayMode, TermActionKey, ScreenStatus } from './types.js';
+import { t, setDefaultLocale } from './i18n/index.js';
 import { TerminalRenderer } from './utils/terminal-renderer.js';
 import {
   DEFAULT_RENDER_COLS,
@@ -2710,7 +2711,7 @@ function scheduleSubmitFailureNotify(
     send({
       type: 'user_notify',
       turnId: currentBotmuxTurnId,
-      message: `⚠️ 刚才那条消息没有写入 ${cliName()}，因为当前按键配置无法从终端自动提交。\n原因：${reason}\n请调整 Claude Code Chat keybinding 后重发。\n开头：${preview}`,
+      message: t('worker.submit_impossible', { cliName: cliName(), reason, preview }),
     });
     return;
   }
@@ -2766,7 +2767,7 @@ function scheduleSubmitFailureNotify(
     send({
       type: 'user_notify',
       turnId: currentBotmuxTurnId,
-      message: `⚠️ 刚才那条消息发给 ${cliName()} 后没能确认提交（重试 Enter 后等了 ${Math.round(SUBMIT_DEFERRED_RECHECK_MS / 1000)}s 仍未在${transcriptLabel}里看到新记录）。可能卡在输入框里——请去 Web 终端看一下，手动按 Enter 或重发。\n开头：${preview}`,
+      message: t('worker.submit_unconfirmed', { cliName: cliName(), secs: Math.round(SUBMIT_DEFERRED_RECHECK_MS / 1000), transcriptLabel, preview }),
     });
   }, SUBMIT_DEFERRED_RECHECK_MS);
 }
@@ -3067,7 +3068,7 @@ function setupAdoptTranscriptBridges(cfg: Extract<DaemonToWorker, { type: 'init'
       if (!existsSync(sessionDir)) {
         send({
           type: 'final_output',
-          content: '⚠️ 当前 CoCo 进程的会话目录已被删除（可能是 e2e 测试清理或手动 rm），写到 events.jsonl 的内容会落到一个失效 inode 上，桥接读不到。请重启 CoCo 后重新 /adopt。',
+          content: t('worker.coco_session_dir_gone'),
           lastUuid: `coco-adopt-stale-${randomBytes(4).toString('hex')}`,
           turnId: 'coco-adopt-stale',
         });
@@ -4182,7 +4183,6 @@ process.on('message', async (raw: unknown) => {
       // against the bot's chosen language without each callsite needing to
       // re-thread it.
       if (msg.locale === 'zh' || msg.locale === 'en') {
-        const { setDefaultLocale } = await import('./i18n/index.js');
         setDefaultLocale(msg.locale);
       }
       // Scope session store to this bot's per-bot file.
@@ -4412,6 +4412,15 @@ process.on('message', async (raw: unknown) => {
     case 'set_display_mode': {
       log(`Display mode → ${msg.mode}`);
       applyDisplayMode(msg.mode);
+      break;
+    }
+
+    case 'set_locale': {
+      // Daemon hot-reloaded the bot's UI locale — re-pin this worker's default
+      // so worker-originated user_notify / final_output strings switch language
+      // without a session restart.
+      setDefaultLocale(msg.locale);
+      log(`Locale → ${msg.locale}`);
       break;
     }
 

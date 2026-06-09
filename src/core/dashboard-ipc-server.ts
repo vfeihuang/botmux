@@ -15,7 +15,7 @@ import { findConfigField, applyConfigField } from '../services/bot-config-store.
 import { config } from '../config.js';
 import { computeSandboxDiff, applySandboxDiff } from '../services/sandbox-land.js';
 import { readRawConfig, findEntryIndex, requireConfigPath } from '../services/config-store.js';
-import { setDefaultLocale } from '../i18n/index.js';
+import { setDefaultLocale, localeForBot, t } from '../i18n/index.js';
 import { isLocale, type Locale } from '../i18n/types.js';
 import { readGlobalConfig } from '../global-config.js';
 import { normalizeChatReplyMode, type ChatReplyMode } from '../services/chat-reply-mode-store.js';
@@ -147,7 +147,7 @@ function workingDirForSession(sessionId: string): string | undefined {
 }
 
 ipcRoute('GET', '/api/sessions/:sessionId/sandbox-diff', (_req, res, params) => {
-  const d = computeSandboxDiff(config.session.dataDir, params.sessionId);
+  const d = computeSandboxDiff(config.session.dataDir, params.sessionId, localeForBot(cachedLarkAppId));
   if (!d.ok) return jsonRes(res, 200, { ok: false, error: d.error });
   jsonRes(res, 200, {
     ok: true, empty: d.empty, files: d.files, insertions: d.insertions, deletions: d.deletions,
@@ -158,12 +158,13 @@ ipcRoute('GET', '/api/sessions/:sessionId/sandbox-diff', (_req, res, params) => 
 ipcRoute('POST', '/api/sessions/:sessionId/sandbox-land/:action', (_req, res, params) => {
   if (params.action === 'discard') return jsonRes(res, 200, { ok: true, discarded: true });
   if (params.action !== 'apply') return jsonRes(res, 400, { ok: false, error: 'unknown action' });
+  const locLand = localeForBot(cachedLarkAppId);
   const wd = workingDirForSession(params.sessionId);
-  if (!wd) return jsonRes(res, 404, { ok: false, error: '找不到会话 workingDir' });
-  const d = computeSandboxDiff(config.session.dataDir, params.sessionId);
+  if (!wd) return jsonRes(res, 404, { ok: false, error: t('sandbox.workingdir_not_found', undefined, locLand) });
+  const d = computeSandboxDiff(config.session.dataDir, params.sessionId, locLand);
   if (!d.ok) return jsonRes(res, 200, { ok: false, error: d.error });
-  if (d.empty) return jsonRes(res, 200, { ok: false, error: '沙盒副本已无改动' });
-  const a = applySandboxDiff(wd, d.patch);
+  if (d.empty) return jsonRes(res, 200, { ok: false, error: t('sandbox.no_changes_left', undefined, locLand) });
+  const a = applySandboxDiff(wd, d.patch, locLand);
   jsonRes(res, 200, a.ok ? { ok: true, files: d.files, insertions: d.insertions, deletions: d.deletions, workingDir: wd } : { ok: false, error: a.error });
 });
 
@@ -798,6 +799,19 @@ ipcRoute('POST', '/api/locale/reload', async (_req, res) => {
       botLang = isLocale(entryLang) ? entryLang : null;
       getBot(cachedLarkAppId).config.lang = botLang ?? undefined;
     } catch { /* bot 未注册 / 读盘失败：全局已应用，per-bot 维持原值 */ }
+  }
+
+  // Push the resolved locale to this bot's live workers too. Cards render on the
+  // daemon (already switched above), but a few user-facing strings originate in
+  // the worker process (submit notices, CoCo adopt notes) — without this they'd
+  // stay in the spawn-time language until the session restarts.
+  const workerLocale: Locale = botLang ?? resolvedDefault;
+  const reg = getActiveSessionsRegistry();
+  if (cachedLarkAppId && reg) {
+    for (const ds of reg.values()) {
+      if (ds.larkAppId !== cachedLarkAppId || !ds.worker || ds.worker.killed) continue;
+      try { ds.worker.send({ type: 'set_locale', locale: workerLocale }); } catch { /* worker gone */ }
+    }
   }
 
   jsonRes(res, 200, { ok: true, defaultLocale: resolvedDefault, botLang });

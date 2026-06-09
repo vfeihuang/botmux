@@ -244,6 +244,7 @@ export type DaemonToWorker =
   // 文本后补一记 Enter 提交（多题自由文本不完整支持）。
   | { type: 'coco_drive_picker'; navKeys: string[]; needsReviewSubmit: boolean; comment?: string | null }
   | { type: 'set_display_mode'; mode: DisplayMode }
+  | { type: 'set_locale'; locale: 'zh' | 'en' }
   | { type: 'term_action'; key: TermActionKey }
   | { type: 'refresh_screen' };
 

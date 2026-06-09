@@ -805,6 +805,7 @@ async function updateWorkflowProgressCard(runId: string): Promise<void> {
         // dashboard deeplink contract codex set up in slice 2 (3335adc).
         enrichWithTerminalLink: buildAttemptDeeplinkEnricher(runId, snapshot),
         totalNodes,
+        locale: localeForBot(current.larkAppId),
       });
       await updateMessage(current.larkAppId, current.cardMessageId, cardJson);
     } catch (err) {
@@ -1326,6 +1327,7 @@ async function handleWorkflowCommandIfAny(
           const cardJson = buildWorkflowStartingCard({
             runId: info.runId,
             workflowId: info.workflowId,
+            locale: localeForBot(larkAppId),
           });
           const cardMessageId = await sessionReply(anchor, cardJson, 'interactive', larkAppId);
           if (chatId) {
@@ -1366,7 +1368,7 @@ async function handleWorkflowCommandIfAny(
   if (!result.ok) {
     await sessionReply(
       anchor,
-      `Workflow 命令失败：${result.error}${result.usage ? `\n${result.usage}` : ''}`,
+      `${tr('wf.cmd_failed', { error: result.error }, localeForBot(larkAppId))}${result.usage ? `\n${result.usage}` : ''}`,
       'text',
       larkAppId,
     );
@@ -2174,7 +2176,7 @@ async function handleNewTopic(data: any, ctx: RoutingContext): Promise<void> {
   // weight on first turns. `content` (post force-topic-strip) is what the
   // worker will see; promptContent wraps it for prompt-building paths but
   // leaves `content` untouched for title / log substring uses.
-  const promptContent = buildQuoteHint(parsed, scope, anchor) + content;
+  const promptContent = buildQuoteHint(parsed, scope, anchor, localeForBot(larkAppId)) + content;
 
   // Resolve sender identity for <sender> tag injection. The first call to
   // resolveSender for an unseen open_id may await contact.v3.user.get with a
@@ -2315,10 +2317,7 @@ async function warnGroupJoinScopeOnce(larkAppId: string, detail: string): Promis
     logger.warn(`[auto-start:入群] ${larkAppId} 缺权限提示无法私信（allowedUsers 无 open_id），仅记录日志`);
     return;
   }
-  const dm =
-    `⚠️ botmux「被拉进新群自动开工」已开启，但读取群成员失败，无法判断群里是否有授权用户，自动开工被跳过。\n\n` +
-    `最可能原因：缺少读取群成员的权限（im:chat / 群信息读取），或没有订阅「机器人进群」事件 \`im.chat.member.bot.added_v1\`。\n\n` +
-    `请到飞书开放平台 → 应用 → 权限管理 / 事件订阅 里补齐，然后 \`botmux restart\`。\n\n错误详情：${detail}`;
+  const dm = tr('daemon.auto_start_member_read_failed', { detail }, localeForBot(larkAppId));
   try {
     await sendUserMessage(larkAppId, adminOpenId, dm, 'text');
     logger.info(`[auto-start:入群] ${larkAppId} 已私信 admin 提示补权限`);
@@ -2554,7 +2553,7 @@ async function handleThreadReply(data: any, ctx: RoutingContext): Promise<void> 
     ? `${tr('daemon.foreign_bot_mention_prefix', { botName: foreignBotName! }, localeForBot(larkAppId))}\n`
     : '';
 
-  const promptContent = buildQuoteHint(parsed, scope, anchor) + botSenderPrefix + parsed.content;
+  const promptContent = buildQuoteHint(parsed, scope, anchor, localeForBot(larkAppId)) + botSenderPrefix + parsed.content;
   const existingHookSession = activeSessions.get(sessionKey(anchor, larkAppId));
   emitHookEvent('thread.reply', {
     larkAppId,
