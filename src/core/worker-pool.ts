@@ -576,18 +576,6 @@ export interface WriteLinkOwnerDelivery {
 }
 
 /**
- * Build the write-enabled session card for `ds` and deliver it privately to the
- * bot's owner(s) — the payload behind the `botmux term-link` CLI command.
- *
- * Mirrors the in-chat "🔑 获取操作链接" button flow ({@link deliverWriteLinkCard}),
- * but fans out to the owner audience ({@link resolvePrivateCardAudience}) instead
- * of a single click-operator: a CLI caller has no Lark identity, so "deliver to
- * the owner(s)" is the closest equivalent of "deliver to the person who asked".
- * Each owner gets an in-chat visible-to-you ephemeral card, auto-falling back to
- * a private DM in topic / p2p chats. The write token therefore only ever rides
- * these private channels — it is never returned to the CLI caller / stdout.
- */
-/**
  * Build the write-enabled session card (writable terminal URL + manage buttons)
  * for `ds`, or null when the terminal isn't up yet (no worker port/token).
  * Shared by the owner-fanout ({@link deliverWriteLinkCardToOwners}, behind
@@ -611,6 +599,18 @@ function buildWritableTerminalCard(ds: DaemonSession): string | null {
   );
 }
 
+/**
+ * Build the write-enabled session card for `ds` and deliver it privately to the
+ * bot's owner(s) — the payload behind the `botmux term-link` CLI command.
+ *
+ * Mirrors the in-chat "🔑 获取操作链接" button flow ({@link deliverWriteLinkCard}),
+ * but fans out to the owner audience ({@link resolvePrivateCardAudience}) instead
+ * of a single click-operator: a CLI caller has no Lark identity, so "deliver to
+ * the owner(s)" is the closest equivalent of "deliver to the person who asked".
+ * Each owner gets an in-chat visible-to-you ephemeral card, auto-falling back to
+ * a private DM in topic / p2p chats. The write token therefore only ever rides
+ * these private channels — it is never returned to the CLI caller / stdout.
+ */
 export async function deliverWriteLinkCardToOwners(ds: DaemonSession): Promise<WriteLinkOwnerDelivery> {
   const cardJson = buildWritableTerminalCard(ds);
   if (!cardJson) return { ok: false, error: 'terminal_unavailable', delivered: 0, total: 0, channels: [] };
