@@ -411,11 +411,14 @@ export interface ClaudeFamilyVariant {
    *  aliases; forks whose model set is gateway-defined
    *  pass undefined so setup skips the prompt. */
   readonly modelChoices?: readonly string[];
+  /** Auth/login paths kept real+writable in the file sandbox (see CliAdapter.authPaths). */
+  readonly authPaths?: readonly string[];
 }
 
 export function createClaudeCodeAdapter(pathOverride?: string): CliAdapter {
   return createClaudeFamilyAdapter({
     id: 'claude-code',
+    authPaths: ['~/.claude/.credentials.json'],
     resumeBin: 'claude',
     dataDir: DEFAULT_CLAUDE_DATA_DIR,
     stateJsonPath: join(homedir(), '.claude.json'),
@@ -437,6 +440,7 @@ export function createClaudeFamilyAdapter(variant: ClaudeFamilyVariant, rawBin: 
     claudeDataDir: variant.dataDir,
     claudeStateJsonPath: variant.stateJsonPath,
     spawnEnv: variant.spawnEnv,
+    authPaths: variant.authPaths,
 
     buildResumeCommand({ sessionId, cliSessionId }) {
       // Claude resumes by reading <id>.jsonl, so we need the most recently

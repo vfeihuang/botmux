@@ -3561,6 +3561,7 @@ function spawnCli(cfg: Extract<DaemonToWorker, { type: 'init' }>): void {
           cliBin: cliAdapter.resolvedBin,
           cliArgs: args,
           hidePaths: cfg.sandboxHidePaths ?? [],
+          authPaths: cliAdapter.authPaths,
         });
         if (sbx) {
           spawnBin = sbx.bin;

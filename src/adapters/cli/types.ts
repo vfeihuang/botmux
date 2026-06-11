@@ -210,6 +210,16 @@ export interface CliAdapter {
    *  data root for forks that set CLAUDE_CONFIG_DIR. */
   readonly claudeStateJsonPath?: string;
 
+  /** Paths (files or dirs) holding THIS CLI's auth / login state that must stay
+   *  REAL + writable inside the file sandbox. The sandbox isolates writes (so the
+   *  agent's project edits are reviewable), but a CLI's token refresh / login
+   *  must PERSIST to the real auth — otherwise the sandboxed CLI loses its login
+   *  (see seed's `bytecloud-auth`). The sandbox binds each existing path rw over
+   *  the isolated overlay so auth reads/refreshes/logins hit the real files.
+   *  `~` is expanded. Keep NARROW (auth only) so session history stays isolated.
+   *  undefined / empty → no carve-out. */
+  readonly authPaths?: readonly string[];
+
   /** Extra env merged into the spawned child's environment. Used by Claude-family
    *  forks to point the CLI at its data root (e.g. Seed's `CLAUDE_CONFIG_DIR`).
    *  Keys placed here are also forwarded through the tmux backend (see

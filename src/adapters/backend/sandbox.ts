@@ -128,6 +128,10 @@ export interface SandboxPlan {
   hideDirs: string[];
   /** Per-bot privacy masks: files blanked with a read-only empty placeholder. */
   hideFiles: { path: string; empty: string }[];
+  /** CLI auth/login paths kept REAL + writable (bound rw over the isolated home so
+   *  the CLI's token refresh / login persists — unlike project edits which are
+   *  isolated). Resolved + existence-filtered by prepareSandbox. */
+  authReal?: string[];
   /** Keep network egress. File-only scope ⇒ default true (npm/pip/git work). */
   net?: boolean;
 }
@@ -150,6 +154,9 @@ export function buildSandboxArgs(plan: SandboxPlan): string[] {
   // Write-isolated home + project (overlay merged: reads=real lower, writes=upper).
   a.push('--bind', plan.homeMerged, plan.home);
   a.push('--bind', plan.projectMerged, plan.projectMount);
+  // CLI auth/login dirs kept REAL + writable (bind over the isolated home) so token
+  // refresh / login persists. Narrow (auth only) → session history stays isolated.
+  for (const p of plan.authReal ?? []) a.push('--bind', p, p);
   // Per-bot privacy masks (opt-in, no defaults).
   for (const dir of plan.hideDirs) a.push('--tmpfs', dir);
   for (const f of plan.hideFiles) a.push('--ro-bind', f.empty, f.path);
@@ -233,6 +240,9 @@ export function prepareSandbox(opts: {
   /** Per-bot privacy masks (opt-in, no defaults). Paths existing as dirs are
    *  blanked with a tmpfs; files with an empty read-only placeholder. */
   hidePaths?: string[];
+  /** This CLI's auth/login paths (CliAdapter.authPaths) to keep real+writable so
+   *  token refresh / login persists. `~` expanded; missing paths skipped. */
+  authPaths?: readonly string[];
 }): SandboxSpawn | null {
   if (!opts.enabled) return null;
   if (process.platform !== 'linux') return null; // overlayfs + bwrap are Linux-only
@@ -308,6 +318,17 @@ export function prepareSandbox(opts: {
     }
   }
 
+  // CLI auth/login paths kept real+writable (token refresh / login must persist,
+  // unlike isolated project edits). Resolve `~` and bind only existing paths — a
+  // missing auth file isn't a valid mountpoint (the CLI must be logged in on the
+  // host; login-from-scratch inside the sandbox isn't supported).
+  const authReal: string[] = [];
+  for (const raw of opts.authPaths ?? []) {
+    if (!raw || typeof raw !== 'string') continue;
+    const p = raw.replace(/^~(?=\/|$)/, home);
+    try { if (existsSync(p)) authReal.push(p); } catch { /* */ }
+  }
+
   const plan: SandboxPlan = {
     projectMount,
     projectMerged: projMerged,
@@ -316,6 +337,7 @@ export function prepareSandbox(opts: {
     outbox,
     hideDirs,
     hideFiles,
+    authReal,
     net: true,
   };
   const args = buildSandboxArgs(plan);

@@ -123,6 +123,7 @@ export function createCodexAdapter(pathOverride?: string): CliAdapter {
   let cachedBin: string | undefined;
   return {
     id: 'codex',
+    authPaths: ['~/.codex/auth.json'],
     get resolvedBin(): string { return (cachedBin ??= resolveCommand(rawBin)); },
 
     buildArgs({ sessionId, resume, resumeSessionId, workingDir, model, disableCliBypass }) {
