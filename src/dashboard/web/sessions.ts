@@ -326,11 +326,18 @@ export function renderSessionsPage(root: HTMLElement) {
   // 整簇拖拽：拖群组容器头部时记录 (chatId, 源列)，drop 时整组搬运
   let kanbanDragClusterChat: string | null = null;
   let kanbanDragClusterCol: SessionKanbanColumn | null = null;
-  // 团队清单（groupBy='team' 首次激活时懒加载：本地托管团队 + 远程 roster）
-  let kanbanTeams: Array<{ key: string; label: string; botIds: Set<string> }> = [];
-  // 群 → 在场 bot 集合（来自 /api/groups 矩阵）。「团队群」= 含该团队任一 bot
-  // 的群（飞书手动拉的 / dashboard 建的都覆盖）；团队看板按它过滤会话。
-  let kanbanChatBots: Map<string, Set<string>> | null = null;
+  // 团队清单（groupBy='team' 首次激活时懒加载：本地托管团队 + 远程 roster）。
+  // botNames 用来与 /introduce 记录的外部 bot 按名字匹配（introduce 只留
+  // openId+name，而 open_id 是 app-scoped 的，名字是两边唯一的公共标识）。
+  let kanbanTeams: Array<{
+    key: string;
+    label: string;
+    botIds: Set<string>;
+    botNames: Set<string>;
+    groupChats: Set<string>;
+  }> = [];
+  // 群 → { 在场自家 bot 集合, introduce 过的外部 bot 名字集合 }（/api/groups）。
+  let kanbanChatBots: Map<string, { botIds: Set<string>; observedNames: Set<string> }> | null = null;
   let kanbanTeamsLoaded = false;
   let kanbanTeamsLoading = false;
   let kanbanTeamKey: string = (() => {
@@ -349,22 +356,36 @@ export function renderSessionsPage(root: HTMLElement) {
       if (Array.isArray(groups?.chats)) {
         kanbanChatBots = new Map(groups.chats.map((c: any) => [
           String(c.chatId),
-          new Set<string>((c.memberBots ?? []).filter((mb: any) => mb.inChat).map((mb: any) => String(mb.larkAppId))),
+          {
+            botIds: new Set<string>((c.memberBots ?? []).filter((mb: any) => mb.inChat).map((mb: any) => String(mb.larkAppId))),
+            observedNames: new Set<string>((c.observedBotNames ?? []).map((n: any) => String(n))),
+          },
         ]));
       }
+      const rosterBots = (bots: any[]): { ids: Set<string>; names: Set<string> } => ({
+        ids: new Set<string>(bots.map((b: any) => String(b.larkAppId))),
+        names: new Set<string>(bots.map((b: any) => String(b.name ?? '')).filter(Boolean)),
+      });
       const teams: typeof kanbanTeams = [];
       for (const tm of hosted?.teams ?? []) {
+        const { ids, names } = rosterBots(tm.bots ?? []);
         teams.push({
           key: `local:${tm.teamId}`,
           label: tm.isDefault ? t('team.myHostedTeam') : String(tm.name ?? tm.teamId),
-          botIds: new Set<string>((tm.bots ?? []).map((b: any) => String(b.larkAppId))),
+          botIds: ids,
+          botNames: names,
+          groupChats: new Set<string>((tm.groupChatIds ?? []).map((c: any) => String(c))),
         });
       }
       for (const m of remote?.memberships ?? []) {
+        const { ids, names } = rosterBots(m.roster?.bots ?? []);
         teams.push({
           key: `${m.hubUrl}::${m.teamId}`,
           label: String(m.teamName ?? m.teamId ?? m.hubUrl),
-          botIds: new Set<string>((m.roster?.bots ?? []).map((b: any) => String(b.larkAppId))),
+          botIds: ids,
+          botNames: names,
+          // 远程团队发起的协作群绑定记录在 hub 侧，spoke 暂取不到
+          groupChats: new Set<string>(),
         });
       }
       kanbanTeams = teams;
@@ -677,32 +698,32 @@ export function renderSessionsPage(root: HTMLElement) {
         void loadKanbanTeams();
       } else {
         const team = kanbanTeams.find(tm => tm.key === kanbanTeamKey) ?? kanbanTeams[0];
-        // 「团队群」= 协作群：群内同时在场该团队 ≥2 个成员 bot（手动拉的、
-        // dashboard 建的都覆盖）。只含 1 个 bot 的普通工作群不算——否则全量
-        // bot 的默认团队会匹配所有群，筛选完全失效。单 bot 团队退回 ≥1。
-        // 命中群里**所有** bot 的会话都展示（协作视角）。矩阵缺失退回按归属 bot。
+        // 「团队群」白名单（申晗定稿）：
+        //   A. dashboard 团队页发起的协作群（建群时落盘的 team↔chatId 绑定）
+        //   B. 群里 /introduce 过该团队成员机器人的群——介绍记录按名字与团队
+        //      roster 匹配；介绍过的若不是本团队成员，不算（防误筛）
+        // 命中群里所有 bot 的会话都展示（本质 = 同团队 bot 所在群/话题的会话）。
         let teamRows: any[] = [];
-        let teamChatCount = 0;
+        const teamChats = new Set<string>();
         if (team) {
-          const threshold = team.botIds.size >= 2 ? 2 : 1;
+          for (const chatId of team.groupChats) teamChats.add(chatId);
           if (kanbanChatBots) {
-            const teamChats = new Set<string>();
-            for (const [chatId, bots] of kanbanChatBots) {
-              let n = 0;
+            for (const [chatId, c] of kanbanChatBots) {
+              if (teamChats.has(chatId)) continue;
+              // 自家团队 bot 在场，且群里介绍过同团队的外部机器人
+              let hasTeamBot = false;
               for (const id of team.botIds) {
-                if (bots.has(id) && ++n >= threshold) {
-                  teamChats.add(chatId);
-                  break;
-                }
+                if (c.botIds.has(id)) { hasTeamBot = true; break; }
+              }
+              if (!hasTeamBot) continue;
+              for (const n of c.observedNames) {
+                if (team.botNames.has(n)) { teamChats.add(chatId); break; }
               }
             }
-            teamChatCount = teamChats.size;
-            teamRows = rows.filter(r => teamChats.has(String(r.chatId)));
-          } else {
-            teamRows = rows.filter(r => team.botIds.has(String(r.larkAppId)));
           }
+          teamRows = rows.filter(r => teamChats.has(String(r.chatId)));
         }
-        teamStats.textContent = t('sessions.kanban.teamScope', { chats: teamChatCount, sessions: teamRows.length });
+        teamStats.textContent = t('sessions.kanban.teamScope', { chats: teamChats.size, sessions: teamRows.length });
         html = kanbanFlowHtml(teamRows);
       }
     } else {

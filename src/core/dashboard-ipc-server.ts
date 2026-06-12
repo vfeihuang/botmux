@@ -14,6 +14,7 @@ import * as oncallStore from '../services/oncall-store.js';
 import * as brandStore from '../services/brand-store.js';
 import * as sandboxStore from '../services/sandbox-store.js';
 import * as cardPrefsStore from '../services/card-prefs-store.js';
+import * as observedBotsStore from '../services/observed-bots-store.js';
 import * as grantPrefsStore from '../services/grant-prefs-store.js';
 import { findConfigField, applyConfigField } from '../services/bot-config-store.js';
 import { config } from '../config.js';
@@ -676,7 +677,12 @@ ipcRoute('GET', '/api/groups', async (_req, res) => {
     const enriched = chats.map(c => {
       const oncall = oncallStore.getOncallStatus(cachedLarkAppId, c.chatId);
       const hasRole = resolveRoleFile(cachedLarkAppId, c.chatId) !== null;
-      return { ...c, oncallChat: oncall ?? null, firstSeenAt: seenMap.get(c.chatId) ?? null, hasRole };
+      // /introduce 记录的外部 botmux 机器人（按名字）——dashboard 团队看板用
+      // 它识别「介绍过同团队机器人的协作群」。
+      const observedBotNames = observedBotsStore
+        .listObservedBots(config.session.dataDir, cachedLarkAppId, c.chatId)
+        .map(b => b.name);
+      return { ...c, oncallChat: oncall ?? null, firstSeenAt: seenMap.get(c.chatId) ?? null, hasRole, observedBotNames };
     });
     jsonRes(res, 200, { chats: enriched });
   } catch (e) {

@@ -1,4 +1,8 @@
-import { describe, expect, it } from 'vitest';
+import { mkdtempSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { afterEach, describe, expect, it } from 'vitest';
+import { listTeamGroups, recordTeamGroup } from '../src/services/team-groups-store.js';
 import {
   KANBAN_COLUMN_IDS,
   normalizeKanbanColumn,
@@ -87,6 +91,30 @@ describe('effectiveKanbanPosition', () => {
   it('ignores non-finite stored positions', () => {
     expect(effectiveKanbanPosition({ kanbanPosition: Number.NaN, lastMessageAt: 0 }))
       .toBe(effectiveKanbanPosition({ lastMessageAt: 0 }));
+  });
+});
+
+describe('team-groups-store', () => {
+  let dir: string;
+  afterEach(() => { if (dir) rmSync(dir, { recursive: true, force: true }); });
+
+  it('records and lists team↔chat bindings, deduped', () => {
+    dir = mkdtempSync(join(tmpdir(), 'team-groups-'));
+    expect(listTeamGroups(dir)).toEqual([]);
+    recordTeamGroup(dir, 'team-a', 'oc_1', 1000);
+    recordTeamGroup(dir, 'team-a', 'oc_2', 2000);
+    recordTeamGroup(dir, 'team-b', 'oc_1', 3000);
+    recordTeamGroup(dir, 'team-a', 'oc_1', 4000); // 重复绑定不追加
+    expect(listTeamGroups(dir)).toHaveLength(3);
+    expect(listTeamGroups(dir, 'team-a').map(b => b.chatId)).toEqual(['oc_1', 'oc_2']);
+    expect(listTeamGroups(dir, 'team-b').map(b => b.chatId)).toEqual(['oc_1']);
+  });
+
+  it('ignores empty ids and survives a missing file', () => {
+    dir = mkdtempSync(join(tmpdir(), 'team-groups-'));
+    recordTeamGroup(dir, '', 'oc_1');
+    recordTeamGroup(dir, 'team-a', '');
+    expect(listTeamGroups(dir)).toEqual([]);
   });
 });
 

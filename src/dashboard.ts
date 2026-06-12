@@ -731,8 +731,12 @@ const server = createServer(async (req, res) => {
             // Strip per-bot fields from chat-level so the merged record stays
             // bot-agnostic. oncallChat lives inside memberBots; firstSeenAt is
             // accumulated as the earliest observation across all bots.
-            const { oncallChat, firstSeenAt, hasRole, ...chatBase } = c;
-            const cur = out.get(c.chatId) ?? { ...chatBase, memberBots: [] as any[], _firstSeenAt: null as number | null };
+            const { oncallChat, firstSeenAt, hasRole, observedBotNames, ...chatBase } = c;
+            const cur = out.get(c.chatId) ?? { ...chatBase, memberBots: [] as any[], _firstSeenAt: null as number | null, observedBotNames: [] as string[] };
+            // /introduce 记录按观察者（bot）分文件——跨 daemon 取并集（按名字去重）
+            if (Array.isArray(observedBotNames) && observedBotNames.length) {
+              cur.observedBotNames = [...new Set([...(cur.observedBotNames ?? []), ...observedBotNames])];
+            }
             cur.memberBots.push({
               larkAppId: d.larkAppId,
               botName: d.botName,

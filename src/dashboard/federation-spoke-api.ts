@@ -25,6 +25,7 @@ import { addMembership, listMemberships, removeMembership } from '../services/fe
 import type { FederatedBot } from '../services/federation-store.js';
 import { listFederatedDeployments } from '../services/federation-store.js';
 import { ensureDefaultTeam, DEFAULT_TEAM_ID, listTeams, createTeam, deleteTeam, getTeam } from '../services/team-store.js';
+import { listTeamGroups } from '../services/team-groups-store.js';
 import { createInvite, deleteInvitesForTeam } from '../services/invite-store.js';
 import { removeTeamFederation, removeDeployment } from '../services/federation-store.js';
 import { loadBotConfigs, registerBot, getBot, type BotConfig } from '../bot-registry.js';
@@ -388,6 +389,8 @@ export async function handleFederationSpokeApi(
     const suggestedHubUrl = `http://${config.dashboard.externalHost}:${config.dashboard.port}`;
     const teams = listTeams(dataDir).map(t => ({
       teamId: t.id, name: t.name, isDefault: t.id === DEFAULT_TEAM_ID,
+      // dashboard 团队页发起过的协作群 —— 看板团队筛选的白名单之一
+      groupChatIds: listTeamGroups(dataDir, t.id).map(b => b.chatId),
       ...buildFederatedRoster(dataDir, t.id, botConfigOrder(), undefined, live),
     }));
     jsonRes(res, 200, { ok: true, deployment: me, suggestedHubUrl, teams });
