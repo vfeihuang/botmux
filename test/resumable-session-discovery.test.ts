@@ -70,6 +70,20 @@ describe('discoverClaudeFamilySessions', () => {
     expect(out.map((s) => s.cliSessionId)).toEqual(['eeee5555-0000-0000-0000-000000000005']);
   });
 
+  // Regression (Codex): an EXTERNAL session whose prompt merely *discusses*
+  // botmux's XML must NOT be mis-flagged — detection is structural (leading
+  // envelope / full footer), not bare tag-name substring.
+  it('keeps external sessions that only mention botmux tags in prose', async () => {
+    writeSession('-root-p', 'ext-discuss-1', [
+      { type: 'user', cwd: '/root/p', message: { role: 'user', content: 'I am debugging botmux and the <user_message> tag behavior, and why does <sender type= show up?' } },
+    ]);
+    writeSession('-root-p', 'ext-discuss-2', [
+      { type: 'user', cwd: '/root/p', message: { role: 'user', content: 'Please explain <botmux_routing> in our docs' } },
+    ]);
+    const out = await discoverClaudeFamilySessions(dataDir, 10);
+    expect(out.map((s) => s.cliSessionId).sort()).toEqual(['ext-discuss-1', 'ext-discuss-2']);
+  });
+
   it('drops empty / command-only sessions (no real user prompt)', async () => {
     writeSession('-root-proj', 'ffff6666-0000-0000-0000-000000000006', [
       { type: 'user', cwd: '/root/proj', message: { role: 'user', content: '<local-command-caveat>...</local-command-caveat>' } },
@@ -158,6 +172,22 @@ describe('discoverRolloutSessions (codex / traex)', () => {
     ]);
     const out = await discoverRolloutSessions(sessionsRoot, 10);
     expect(out.map((s) => s.cliSessionId)).toEqual(['sid-ext']);
+  });
+
+  // Regression (Codex blocker 2): legacy botmux rollouts may carry a
+  // "你已连接到飞书话题，" preamble before "用户发送了：", which an anchored ^ match
+  // missed. The envelope-paired-with-"Session ID:" combo catches it regardless.
+  it('drops legacy botmux rollouts even with a preamble before 用户发送了', async () => {
+    writeRollout('2026/04/22', 'rollout-legacy.jsonl', [
+      { type: 'session_meta', payload: { id: 'legacy-bmx', cwd: '/root/x' } },
+      { type: 'event_msg', payload: { type: 'user_message', message: '你已连接到飞书话题，用户发送了：\n---\nhello\n---\n\nSession ID: 4e336606-0db6-4a7e-95a0-13e8685712bb' } },
+    ]);
+    writeRollout('2026/04/23', 'rollout-ext2.jsonl', [
+      { type: 'session_meta', payload: { id: 'ext2', cwd: '/root/y' } },
+      { type: 'event_msg', payload: { type: 'user_message', message: 'a normal codex prompt' } },
+    ]);
+    const out = await discoverRolloutSessions(sessionsRoot, 10);
+    expect(out.map((s) => s.cliSessionId)).toEqual(['ext2']);
   });
 
   it('excludes live rollout ids and keeps collecting until limit is met', async () => {

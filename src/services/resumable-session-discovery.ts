@@ -92,10 +92,35 @@ function truncateTitle(text: string): string {
  *  markers. The session store can't be used for this — it doesn't retain closed
  *  sessions — but the transcript wrapper is a reliable, retention-independent
  *  signal. */
-const BOTMUX_INJECTION_RE = /<sender type=|<\/?user_message>|<botmux_routing>|^用户发送了：\s*\n-{3,}|\[来自[^\]]*?@mention\]/;
+//  Each pattern matches a STRUCTURAL shape botmux produces — never a bare tag
+//  name — so an external session whose prompt merely *discusses* botmux's XML
+//  (common in this repo: "explain <botmux_routing>", "why does <sender type=
+//  appear") is NOT mis-flagged.
+const BOTMUX_INJECTION_PATTERNS: readonly RegExp[] = [
+  // The whole prompt IS a botmux envelope — it STARTS with the opening wrapper.
+  // botmux wraps every forwarded AND scheduled message this way; an external
+  // prompt that merely discusses the tags has them mid-text, not leading. This
+  // also catches scheduled-task sessions that carry no trailing <sender> block.
+  /^<user_message>[\s\S]*?<\/user_message>/,
+  /^用户发送了：\s*\n-{3,}/,
+  // Modern envelope: the `</user_message>` close butted up against one of
+  // botmux's trailing blocks (claude → <sender>, codex/traex → <session_id>,
+  // plus <mentions>/<botmux_reminder>/<botmux_routing>/<available_bots>). A
+  // prompt that only mentions "<user_message>" never has this adjacency.
+  /<\/user_message>\s*<(?:sender|session_id|mentions|botmux_reminder|botmux_routing|available_bots)\b/i,
+  // The per-message footer with a real Lark open_id — bulletproof against a
+  // prompt that merely contains the substring "<sender type=".
+  /<sender\s+type="(?:user|bot)"\s+open_id="ou_[0-9a-z]{16,}"/i,
+  // botmux bot-handoff / quoted-message markers (e.g. antigravity `display`).
+  /\[来自[^\]]*?@mention\]|\[用户引用了消息\s*用\s*botmux\s+quoted/,
+  // Legacy "用户发送了：---…---" envelope PAIRED with the injected "Session ID:
+  // <uuid>" — the combination (not either alone, not anchored at ^) is what's
+  // unfakeable, so an optional "你已连接到飞书话题，" preamble doesn't defeat it.
+  /用户发送了：\s*\n-{3,}[\s\S]*?\n-{3,}[\s\S]*?Session ID:\s*[0-9a-f]{8}-[0-9a-f]{4}-/i,
+];
 
 function isBotmuxInjected(text: string): boolean {
-  return BOTMUX_INJECTION_RE.test(text);
+  return BOTMUX_INJECTION_PATTERNS.some((re) => re.test(text));
 }
 
 interface FileEntry { path: string; mtimeMs: number; }
