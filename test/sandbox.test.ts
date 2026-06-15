@@ -11,7 +11,7 @@ import { describe, it, expect } from 'vitest';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { mkdtempSync, existsSync, writeFileSync, readFileSync, symlinkSync, rmSync, mkdirSync } from 'node:fs';
-import { buildSandboxArgs, validateRelayRequest, materializeOutboxFile, prepareSandbox, type SandboxPlan } from '../src/adapters/backend/sandbox.js';
+import { buildSandboxArgs, reexposeRunBinArgs, validateRelayRequest, materializeOutboxFile, prepareSandbox, type SandboxPlan } from '../src/adapters/backend/sandbox.js';
 import { computeSandboxDiff, applySandboxDiff, upperDir } from '../src/services/sandbox-land.js';
 
 const tmp = () => mkdtempSync(join(tmpdir(), 'sbx-'));
@@ -109,6 +109,42 @@ describe('buildSandboxArgs (overlay model)', () => {
     for (const flag of ['--unshare-user', '--unshare-pid', '--unshare-ipc']) {
       expect(a).toContain(flag);
     }
+  });
+});
+
+// ── reexposeRunBinArgs: restore fnm/nvm bin dirs masked by --tmpfs /run ──
+// Regression for "file sandbox can't start" on fnm/nvm/volta machines: the
+// resolved CLI binary (and the daemon's own node) live under /run/user/.../bin,
+// which --tmpfs /run masks → bwrap execvp fails → crash-loop.
+describe('reexposeRunBinArgs (fnm/nvm /run bin dirs)', () => {
+  it('re-binds the containing dir of a /run-resident binary read-only at its real path', () => {
+    const a = reexposeRunBinArgs(['/run/user/1001/fnm_multishells/abc_123/bin/codex']);
+    expect(tripleIdx(a, '--ro-bind-try', '/run/user/1001/fnm_multishells/abc_123/bin', '/run/user/1001/fnm_multishells/abc_123/bin')).toBe(0);
+  });
+
+  it('dedupes when the binary and node share one /run bin dir', () => {
+    const dir = '/run/user/1001/fnm_multishells/abc_123/bin';
+    const a = reexposeRunBinArgs([`${dir}/codex`, `${dir}/node`]);
+    expect(a).toEqual(['--ro-bind-try', dir, dir]);
+  });
+
+  it('handles distinct /run dirs for the binary and node', () => {
+    const a = reexposeRunBinArgs(['/run/a/bin/codex', '/run/b/bin/node']);
+    expect(tripleIdx(a, '--ro-bind-try', '/run/a/bin', '/run/a/bin')).toBeGreaterThanOrEqual(0);
+    expect(tripleIdx(a, '--ro-bind-try', '/run/b/bin', '/run/b/bin')).toBeGreaterThanOrEqual(0);
+  });
+
+  it('ignores binaries outside /run (system node, npm/pnpm globals) — non-fnm users unaffected', () => {
+    expect(reexposeRunBinArgs(['/usr/bin/node', '/usr/local/bin/codex', undefined])).toEqual([]);
+  });
+
+  it('NEVER re-binds /run itself (would clobber the tmpfs + the /run/sbxbin relay shim)', () => {
+    // A binary directly at /run/node has dirname '/run' — must be skipped.
+    expect(reexposeRunBinArgs(['/run/node'])).toEqual([]);
+  });
+
+  it('skips empty/non-string entries', () => {
+    expect(reexposeRunBinArgs([undefined, '', '/run/user/1/bin/x'])).toEqual(['--ro-bind-try', '/run/user/1/bin', '/run/user/1/bin']);
   });
 });
 

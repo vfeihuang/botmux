@@ -170,6 +170,35 @@ export function buildSandboxArgs(plan: SandboxPlan): string[] {
   return a;
 }
 
+/**
+ * After `buildSandboxArgs` masks `/run` with a fresh tmpfs, any executable whose
+ * resolved path lives UNDER `/run` (the common case: fnm/nvm/volta expose the
+ * active toolchain's bin dir as a per-session symlink farm under
+ * `/run/user/<uid>/fnm_multishells/<hash>/bin`, and `which codex` / the daemon's
+ * own `process.execPath` for node land there) would VANISH inside the sandbox →
+ * bwrap `execvp` fails → the CLI exits instantly → Botmux's crash-loop guard
+ * trips after 4 retries. This re-exposes each such bin dir read-only at its real
+ * path so the binary (and the node interpreter its `#!/usr/bin/env node` shebang
+ * needs, which lives in the same fnm bin dir) survive the tmpfs.
+ *
+ * Pure: returns the `--ro-bind-try <dir> <dir>` args (deduped, `/run/`-subpaths
+ * only — NEVER `/run` itself, which would clobber the tmpfs and the relay shim
+ * mounted at /run/sbxbin). `-try` so a stale/racing path can't fail the spawn.
+ * Returns [] for binaries already outside /run (system node, npm/pnpm globals) —
+ * non-fnm users are unaffected.
+ */
+export function reexposeRunBinArgs(binPaths: (string | undefined)[]): string[] {
+  const dirs = new Set<string>();
+  for (const p of binPaths) {
+    if (!p || typeof p !== 'string') continue;
+    const d = dirname(p);
+    if (d.startsWith('/run/')) dirs.add(d); // startsWith('/run/') excludes '/run' itself
+  }
+  const out: string[] = [];
+  for (const d of dirs) out.push('--ro-bind-try', d, d);
+  return out;
+}
+
 // ───────────────────────────── orchestration ─────────────────────────────────
 
 /** Absolute path to this build's compiled cli.js (dist/cli.js), derived from
@@ -350,6 +379,11 @@ export function prepareSandbox(opts: {
   // botmux-send etc. skills, no secrets). Re-exposed read-only at its real path.
   const pluginDir = join(home, '.botmux', 'claude-plugin');
   args.push('--ro-bind-try', pluginDir, pluginDir);
+  // Re-expose any CLI/node bin dir living under /run (fnm/nvm/volta symlink farms)
+  // that the `--tmpfs /run` above just masked — else the resolved cliBin / the
+  // node its shebang needs vanish in-sandbox and the CLI crash-loops on spawn.
+  // process.execPath = the daemon's own node (under /run too when fnm-managed).
+  args.push(...reexposeRunBinArgs([opts.cliBin, process.execPath]));
 
   // Authoritative child env via bwrap --setenv (works on pty AND tmux — the tmux
   // backend only forwards a fixed whitelist, which excludes HOME/PATH/relay).
