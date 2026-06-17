@@ -625,7 +625,20 @@ export async function handleCardAction(data: CardActionData, deps: CardHandlerDe
       }
       const spec = fk ? findConfigField(fk) : undefined;
       if (!spec) return { toast: { type: 'error', content: t('cmd.config.unknown_field', { field: fk ?? '?', fields: '' }, loc) } };
-      const r = await applyConfigField(larkAppId, spec, raw ? raw : null);
+      // 多值字段（stringList，如 customPassthroughCommands）：留空 = 清除，否则按 kind
+      // 归一化成数组再落盘；普通文本字段沿用原始字符串。
+      let valueToApply: string | string[] | null;
+      if (!raw) {
+        valueToApply = null;
+      } else if (spec.kind === 'stringList') {
+        const coerced = coerceConfigValue(spec, raw);
+        if (!coerced.ok) return { toast: { type: 'error', content: t('cmd.config.write_failed', { reason: coerced.reason }, loc) } };
+        // stringList 的 coerce 只会产出 string[]（永不 boolean）；narrow 给 applyConfigField。
+        valueToApply = coerced.value as string[];
+      } else {
+        valueToApply = raw;
+      }
+      const r = await applyConfigField(larkAppId, spec, valueToApply);
       if (!r.ok) return { toast: { type: 'error', content: t('cmd.config.write_failed', { reason: r.reason }, loc) } };
       logger.info(`[config:${larkAppId}] text field ${spec.key} saved via card`);
       return { toast: { type: 'success', content: `✓ ${spec.key} = ${r.newText}` } };

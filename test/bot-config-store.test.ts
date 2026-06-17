@@ -162,6 +162,41 @@ describe('bot-config store', () => {
     expect(registry.getBot('app_default').config.cliId).toBe('codex');
   });
 
+  it('stringList (customPassthroughCommands) coerces, dedupes, drops daemon-shadowing + junk', async () => {
+    const { store } = await freshModules();
+    const spec = store.findConfigField('customPassthroughCommands')!;
+    expect(spec.kind).toBe('stringList');
+    // 逗号/空格混排、缺前导 / 自动补、大写归一、去重；/status 遮蔽 daemon 命令被丢、`/b@d` 非法字符被丢。
+    expect(store.coerceConfigValue(spec, 'goal, /export /GOAL /status /b@d'))
+      .toEqual({ ok: true, value: ['/goal', '/export'] });
+    // 全部非法/被过滤 → empty。
+    expect(store.coerceConfigValue(spec, '/status /!nope')).toEqual({ ok: false, reason: 'empty' });
+  });
+
+  it('stringList field round-trips array to disk + memory; empty/unset clears the key', async () => {
+    const { registry, store } = await loaded();
+    const spec = store.findConfigField('customPassthroughCommands')!;
+
+    const r1 = await store.applyConfigField('app_default', spec, ['/goal', '/export']);
+    expect(r1.ok).toBe(true);
+    if (r1.ok) { expect(r1.oldText).toBe('∅'); expect(r1.newText).toBe('/goal, /export'); expect(r1.effect).toBe('immediate'); }
+    expect(readConfig().customPassthroughCommands).toEqual(['/goal', '/export']);
+    expect(registry.getBot('app_default').config.customPassthroughCommands).toEqual(['/goal', '/export']);
+
+    // 空数组等价清除（bots.json 保持干净）。
+    const r2 = await store.applyConfigField('app_default', spec, []);
+    expect(r2.ok).toBe(true);
+    expect(readConfig().customPassthroughCommands).toBeUndefined();
+    expect(registry.getBot('app_default').config.customPassthroughCommands).toBeUndefined();
+  });
+
+  it('getConfigCardData surfaces customPassthroughCommands as a space-joined string', async () => {
+    const { store } = await loaded({ customPassthroughCommands: ['/goal', '/export'] });
+    expect(store.getConfigCardData('app_default')?.customPassthroughCommands).toBe('/goal /export');
+    const { store: store2 } = await loaded();
+    expect(store2.getConfigCardData('app_default')?.customPassthroughCommands).toBeNull();
+  });
+
   it('getConfigSnapshot reports current values + info', async () => {
     const { store } = await loaded({ model: 'sonnet', disableStreamingCard: true });
     const snap = store.getConfigSnapshot('app_default');
