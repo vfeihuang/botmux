@@ -15,7 +15,7 @@
  *   botmux list --plain   — plain table output (for piping / scripts)
  *   botmux delete <id>    — close a session by ID prefix
  *   botmux delete all     — close all active sessions
- *   botmux autostart enable|disable|status — manage boot-time autostart (launchd / user systemd)
+ *   botmux autostart enable|disable|status — manage boot-time autostart (launchd / user systemd / Windows Task Scheduler)
  */
 import { execSync, execFileSync, spawnSync, spawn } from 'node:child_process';
 import { existsSync, mkdirSync, copyFileSync, readFileSync, writeFileSync, renameSync, readdirSync, readlinkSync, appendFileSync, statSync, unlinkSync } from 'node:fs';
@@ -124,6 +124,10 @@ function ensureConfigDir(): void {
  * may belong to an unrelated installation (e.g. IDE remote extensions).
  */
 function pm2Bin(): string {
+  if (process.platform === 'win32') {
+    const cmd = join(PKG_ROOT, 'node_modules', '.bin', 'pm2.cmd');
+    if (existsSync(cmd)) return cmd;
+  }
   try {
     return require.resolve('pm2/bin/pm2');
   } catch { /* fall through */ }
@@ -191,11 +195,42 @@ function killDuplicatePm2GodDaemons(home: string = PM2_HOME): boolean {
   return true;
 }
 
-function runPm2(args: string[], inherit = true, home: string = PM2_HOME): void {
-  execSync(`${pm2Bin()} ${args.join(' ')}`, {
+function runPm2(args: string[], inherit = true, home: string = PM2_HOME, timeoutMs?: number): void {
+  const pm2 = buildPm2SpawnCommand(pm2Bin(), args);
+  const r = spawnSync(pm2.command, pm2.args, {
     stdio: inherit ? 'inherit' : 'pipe',
     env: pm2Env(home),
+    shell: pm2.shell ?? false,
+    timeout: timeoutMs,
   });
+  if (r.status !== 0) {
+    // r.error is set when the process couldn't be spawned/timed out (status null);
+    // prefer it so failures don't surface as a bare "status null".
+    const detail = r.error?.message ?? `status ${r.status}`;
+    throw new Error(`pm2 ${args.join(' ')} failed: ${detail}`);
+  }
+}
+
+/**
+ * Run a pm2 command and capture stdout. Routes through buildPm2SpawnCommand so
+ * it works on Windows (where pm2Bin() resolves to a `.cmd` that must run through
+ * a shell) as well as macOS/Linux. Throws on non-zero exit / spawn failure.
+ */
+function pm2Capture(args: string[], home: string = PM2_HOME, timeoutMs = 10_000): string {
+  const pm2 = buildPm2SpawnCommand(pm2Bin(), args);
+  const r = spawnSync(pm2.command, pm2.args, {
+    encoding: 'utf-8',
+    stdio: ['pipe', 'pipe', 'pipe'],
+    env: pm2Env(home),
+    shell: pm2.shell ?? false,
+    timeout: timeoutMs,
+  });
+  if (r.status !== 0) {
+    const detail = r.error?.message
+      ?? ((r.stderr ? String(r.stderr).trim() : '') || `status ${r.status}`);
+    throw new Error(`pm2 ${args.join(' ')} failed: ${detail}`);
+  }
+  return typeof r.stdout === 'string' ? r.stdout : '';
 }
 
 function loadBotsJson(): any[] {
@@ -825,7 +860,7 @@ async function writeSingleBotConfig(): Promise<boolean> {
   await finishOpenPlatformSetup(bot.larkAppId, botBrand(bot));
   console.log(`下一步:`);
   console.log(`  1. botmux start              启动 daemon`);
-  console.log(`  2. botmux autostart enable   注册开机自启（推荐：${process.platform === 'darwin' ? 'mac launchd' : process.platform === 'linux' ? 'linux user systemd' : '当前平台暂不支持'}，无需 sudo）`);
+  console.log(`  2. botmux autostart enable   注册开机自启（推荐：${process.platform === 'darwin' ? 'mac launchd' : process.platform === 'linux' ? 'linux user systemd' : process.platform === 'win32' ? 'Windows Task Scheduler' : '当前平台暂不支持'}，无需 sudo）`);
   return true;
 }
 
@@ -1054,7 +1089,7 @@ function preflightNodeSanity(): void {
             console.warn(`⚠️  pm2 god daemon (pid ${pm2Pid}) 使用的 Node 二进制已失效: ${cleanPath}`);
             console.warn(`   自动杀掉 pm2 god 以便用当前 Node 重启...`);
             try {
-              execSync(`${pm2Bin()} kill`, { env: pm2Env(), stdio: 'pipe', timeout: 10_000 });
+              runPm2(['kill'], false, PM2_HOME, 10_000);
             } catch {
               try { process.kill(pm2Pid, 'SIGKILL'); } catch { /* ignore */ }
             }
@@ -1166,21 +1201,12 @@ function cleanupStaleDaemonDescriptors(): void {
 /** Delete all pm2 processes matching botmux / botmux-* under the given PM2_HOME. */
 function deleteAllBotmuxProcesses(home: string = PM2_HOME): void {
   try {
-    const output = execSync(`${pm2Bin()} jlist`, {
-      encoding: 'utf-8',
-      stdio: ['pipe', 'pipe', 'pipe'],
-      env: pm2Env(home),
-      timeout: 10_000,
-    });
+    const output = pm2Capture(['jlist'], home);
     const apps = JSON.parse(output) as any[];
     for (const app of apps) {
       if (app.name === PM2_NAME || app.name.startsWith(`${PM2_NAME}-`)) {
         try {
-          execSync(`${pm2Bin()} delete ${app.name}`, {
-            stdio: ['pipe', 'pipe', 'pipe'],
-            env: pm2Env(home),
-            timeout: 10_000,
-          });
+          runPm2(['delete', app.name], false, home, 10_000);
         } catch (e) {
           // Don't swallow silently — a failed delete here used to leave the
           // restart half-done with no trace. Surface it (the auto-restart
@@ -1196,11 +1222,7 @@ function deleteAllBotmuxProcesses(home: string = PM2_HOME): void {
 
 function killPm2GodDaemon(home: string = PM2_HOME): void {
   try {
-    execSync(`${pm2Bin()} kill`, {
-      stdio: 'inherit',
-      env: pm2Env(home),
-      timeout: 15_000,
-    });
+    runPm2(['kill'], true, home, 15_000);
     return;
   } catch {
     // Fall back to direct pid cleanup below.
@@ -1242,12 +1264,7 @@ function cmdStop(): void {
   cleanupLegacyPm2();
   let stopped = false;
   try {
-    const output = execSync(`${pm2Bin()} jlist`, {
-      encoding: 'utf-8',
-      stdio: ['pipe', 'pipe', 'pipe'],
-      env: pm2Env(),
-      timeout: 10_000,
-    });
+    const output = pm2Capture(['jlist']);
     const apps = JSON.parse(output) as any[];
     for (const app of apps) {
       if (app.name === PM2_NAME || app.name.startsWith(`${PM2_NAME}-`)) {
@@ -1325,12 +1342,7 @@ function warnIfLegacyBotmuxAlive(): void {
   if (!legacyPid) return;
   try { process.kill(legacyPid, 0); } catch { return; }
   try {
-    const output = execSync(`${pm2Bin()} jlist`, {
-      encoding: 'utf-8',
-      stdio: ['pipe', 'pipe', 'pipe'],
-      env: pm2Env(legacyHome),
-      timeout: 10_000,
-    });
+    const output = pm2Capture(['jlist'], legacyHome);
     const apps = JSON.parse(output) as any[];
     const hasBotmux = apps.some(a => a.name === PM2_NAME || a.name.startsWith(`${PM2_NAME}-`));
     if (hasBotmux) {
@@ -1376,6 +1388,7 @@ function cmdLogs(): void {
   const child = spawn(pm2.command, pm2.args, {
     stdio: 'inherit',
     env: pm2Env(),
+    shell: pm2.shell ?? false,
   });
   child.on('exit', code => process.exit(code ?? 0));
 }
@@ -2586,7 +2599,7 @@ botmux v${getVersion()} — IM ↔ AI 编程 CLI 桥接
   term-link [id]   获取活跃会话的「可操作终端」（带写 token）。不回显链接，改由
                    daemon 把可操作卡片私密发给 owner（群内仅你可见，话题/单聊回退 DM）。
                    单个活跃会话可省略 id
-  autostart enable     注册开机自启（macOS launchd / Linux user systemd，无需 sudo）
+  autostart enable     注册开机自启（macOS launchd / Linux user systemd / Windows Task Scheduler，无需 sudo）
   autostart disable    注销开机自启
   autostart status     查看自启状态
        unset             清除 worker 预算覆盖，恢复按机器 CPU/内存自动推导
