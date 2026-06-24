@@ -154,6 +154,10 @@ function renderV3DetailPage(root: HTMLElement, runId: string): () => void {
 
   let timer: number | null = null;
   let disposed = false;
+  // One-shot guard for the legacy v2 fallback probe (see poll()'s 404 branch):
+  // already-sent v2 cards / bookmarks point at #/workflows/<v2-id>, which now
+  // belongs to v3; probe the v2 backend once and bounce them to #/legacy-workflow.
+  let triedV2Fallback = false;
   let selected: string | null = null;
   let lastView: RunView | null = null;
   // Which node the panel SHELL is built for, and the signature of the terminal
@@ -498,6 +502,20 @@ function renderV3DetailPage(root: HTMLElement, runId: string): () => void {
     try {
       const r = await fetch(`/api/v3/runs/${encodeURIComponent(runId)}`);
       if (!r.ok) {
+        // Legacy fallback: old v2 detail links are #/workflows/<v2-run-id>, a URL
+        // that now routes to v3 detail. If this id is actually a v2 run, bounce to
+        // the legacy page so already-sent cards/bookmarks still open. Probe once.
+        if (r.status === 404 && !triedV2Fallback) {
+          triedV2Fallback = true;
+          try {
+            const v2 = await fetch(`/api/workflows/runs/${encodeURIComponent(runId)}/snapshot`);
+            if (v2.ok && !disposed) {
+              const q = location.hash.split('?')[1];
+              window.location.replace(`#/legacy-workflow/${encodeURIComponent(runId)}${q ? `?${q}` : ''}`);
+              return;
+            }
+          } catch { /* fall through to not-found */ }
+        }
         if (!disposed) runStatusEl.textContent = r.status === 404 ? 'not found' : `HTTP ${r.status}`;
         return;
       }
