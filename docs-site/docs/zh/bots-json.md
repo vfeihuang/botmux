@@ -109,6 +109,40 @@
 | `autoStartOnGroupJoinPrompt` | 配合上面：自动开工的首轮 prompt；留空 / 空白则空消息开场，让 bot 自己读群上下文。`autoStartOnGroupJoin` 关闭时无意义 |
 | `autoStartOnNewTopic` | `true` 时，话题群里每个新话题的首条消息无需 @ 也自动开工（普通群无效）。默认被动（仅 @ 触发） |
 
+## 内容触发
+
+| 字段 | 说明 |
+|------|------|
+| `contentTriggers` | 按 bot 配置的关键词 / 正则触发器。默认仍然只有 @ 才响应；只有命中这里的规则时，群消息或话题消息才可免 @ 唤醒本 bot。命中后发送 `action.prompt` 加历史上下文给 CLI，而不是把原消息当普通问题。仅 `canTalk` 已放行的发送者可触发；bot 自己和其它 bot 的非 @ 消息不会触发 |
+
+示例：
+
+```json
+{
+  "contentTriggers": [
+    {
+      "name": "summary-trigger",
+      "enabled": true,
+      "scope": "both",
+      "match": { "type": "keyword", "pattern": "总结", "caseSensitive": false },
+      "history": {
+        "topic": { "mode": "current-thread" },
+        "regularGroup": { "mode": "recent-messages", "limit": 50 }
+      },
+      "action": {
+        "type": "start-or-wake-session",
+        "prompt": "请根据当前会话历史生成总结。"
+      }
+    }
+  ]
+}
+```
+
+- `scope`: `topic` / `regularGroup` / `both`。
+- `match.type`: `keyword` 或 `regex`；非法正则会被丢弃并写日志，不会导致 daemon 崩溃。
+- `history.topic.mode`: 当前仅支持 `current-thread`，读取当前话题/thread。
+- `history.regularGroup.mode`: 当前支持 `recent-messages`。`limit` 表示最近 N 条，`sinceHours` 表示最近 N 小时；任一参数为 `0` 表示该维度不限。未配置 `limit` 时默认 50。
+
 ## 语音
 
 | 字段 | 说明 |

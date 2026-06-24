@@ -109,6 +109,40 @@ Run one bot on a GLM Coding Plan (or any Anthropic-compatible provider) while an
 | `autoStartOnGroupJoinPrompt` | Paired with the above: the first-round prompt for proactive start; if empty / blank, opens with an empty message and lets the bot read the group context itself. Meaningless when `autoStartOnGroupJoin` is off |
 | `autoStartOnNewTopic` | When `true`, the first message of every new topic in a topic group starts working automatically without an @ (no effect in plain groups). Defaults to passive (only @ triggers) |
 
+## Content triggers
+
+| Field | Description |
+|------|------|
+| `contentTriggers` | Per-bot keyword / regex triggers. The default remains @-only; only messages matching one of these rules can wake this bot without an @ in groups or topics. On match, botmux sends `action.prompt` plus the configured history context to the CLI instead of treating the original message as the user prompt. The sender still must pass `canTalk`; bot-authored messages without an @ do not trigger |
+
+Example:
+
+```json
+{
+  "contentTriggers": [
+    {
+      "name": "summary-trigger",
+      "enabled": true,
+      "scope": "both",
+      "match": { "type": "keyword", "pattern": "summary", "caseSensitive": false },
+      "history": {
+        "topic": { "mode": "current-thread" },
+        "regularGroup": { "mode": "recent-messages", "limit": 50 }
+      },
+      "action": {
+        "type": "start-or-wake-session",
+        "prompt": "Summarize the configured conversation history."
+      }
+    }
+  ]
+}
+```
+
+- `scope`: `topic`, `regularGroup`, or `both`.
+- `match.type`: `keyword` or `regex`; invalid regexes are dropped with a log message and do not crash the daemon.
+- `history.topic.mode`: currently `current-thread`, reading the current topic/thread.
+- `history.regularGroup.mode`: currently `recent-messages`. `limit` means the latest N messages; `sinceHours` means the latest N hours. A value of `0` means unlimited for that dimension. If `limit` is omitted, it defaults to 50.
+
 ## Voice
 
 | Field | Description |

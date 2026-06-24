@@ -29,6 +29,7 @@ import { localeForBot, t } from '../../i18n/index.js';
 import { chatQuotaKey, globalQuotaKey } from '../../services/grant-store.js';
 import { ensureDefaultOncallBound } from '../../services/oncall-store.js';
 import { resolveRegularGroupMode, resolveGroupMentionMode } from '../../services/chat-reply-mode-store.js';
+import { buildContentTriggerPrompt, findMatchingContentTrigger, type ContentTriggerChatKind, type ContentTriggerRuntimeContext, type MatchedContentTrigger } from './content-trigger.js';
 
 // ─── Bot identity ─────────────────────────────────────────────────────────
 
@@ -982,6 +983,10 @@ export interface RoutingContext {
   anchor: string;
   /** Chat-scope shared-topic reply target for this turn, if any. */
   replyRootId?: string;
+  /** Content trigger prompt that should be sent to the CLI instead of raw text. */
+  promptOverride?: string;
+  /** Metadata for the content trigger that produced promptOverride. */
+  contentTrigger?: ContentTriggerRuntimeContext;
   larkAppId: string;
 }
 
@@ -1256,6 +1261,39 @@ export async function decideRouting(
 ): Promise<{ scope: 'thread' | 'chat'; anchor: string }> {
   const { scope, anchor } = await decideRoutingWithSource(larkAppId, message);
   return { scope, anchor };
+}
+
+async function classifyContentTriggerChatKind(input: {
+  larkAppId: string;
+  chatId: string;
+  chatType: 'group' | 'p2p';
+  routingSource: RoutingSource;
+}): Promise<ContentTriggerChatKind | undefined> {
+  if (input.chatType !== 'group') return undefined;
+  if (input.routingSource === 'topic-chat') return 'topic';
+  if (input.routingSource === 'regular-group-chat' || input.routingSource === 'regular-group-thread') return 'regularGroup';
+  // Real thread replies can occur in topic groups and in regular groups that
+  // use threaded replies. Ask Lark for the current chat mode only on the opt-in
+  // content-trigger path so normal @ routing does not pay this extra lookup.
+  if (input.routingSource === 'real-thread') {
+    const mode = await getChatMode(input.larkAppId, input.chatId, { forceRefresh: true });
+    return mode === 'topic' ? 'topic' : 'regularGroup';
+  }
+  return undefined;
+}
+
+async function resolveContentTriggerMatch(input: {
+  larkAppId: string;
+  chatId: string;
+  chatType: 'group' | 'p2p';
+  routingSource: RoutingSource;
+  message: any;
+}): Promise<MatchedContentTrigger | undefined> {
+  const triggers = getBot(input.larkAppId).config.contentTriggers;
+  if (!triggers || triggers.length === 0) return undefined;
+  const text = extractMessageTextForRouting(input.message);
+  const chatKind = await classifyContentTriggerChatKind(input);
+  return findMatchingContentTrigger(triggers, text, chatKind);
 }
 
 /** 从评论事件 payload 里挖出 { fileToken, fileType, commentId, replyId,
@@ -1702,11 +1740,21 @@ export function startLarkEventDispatcher(larkAppId: string, larkAppSecret: strin
             }
             routing.scope = 'thread';
             routing.anchor = messageId;
+            routingSource = 'topic-chat';
             // ownsSession was true on the stale chatId anchor; the new anchor
             // (messageId) is brand-new, so no current session owns it.
             ownsSession = false;
           }
         }
+
+        const contentTriggerMatch = await resolveContentTriggerMatch({
+          larkAppId,
+          chatId,
+          chatType,
+          routingSource,
+          message,
+        });
+        const contentTriggered = !!contentTriggerMatch && isAllowed;
 
         // Permission gating — same shape as before, just keyed on
         // `ownsSession` (anchor-aware) instead of "rootId presence":
@@ -1737,6 +1785,7 @@ export function startLarkEventDispatcher(larkAppId: string, larkAppSecret: strin
           // handled by the first clause.)
           const mentionMode = resolveGroupMentionMode(larkAppId);
           const relax = (!!replyRootId && isAllowed)
+            || contentTriggered
             || (isAllowed && mentionMode === 'never')
             || (isAllowed && mentionMode === 'topic' && ownsSession && !!message.thread_id)
             || (ownsSession && isAllowed && !!stats && stats.userCount <= 1 && stats.botCount <= 1);
@@ -1774,7 +1823,27 @@ export function startLarkEventDispatcher(larkAppId: string, larkAppSecret: strin
           return;
         }
 
-        const ctx: RoutingContext = { chatId, messageId, chatType, larkAppId, ...routing, replyRootId };
+        const promptOverride = contentTriggered && contentTriggerMatch
+          ? await buildContentTriggerPrompt({ larkAppId, chatId, message, match: contentTriggerMatch })
+          : undefined;
+        if (promptOverride && contentTriggerMatch) {
+          logger.info(
+            `[content-trigger] "${contentTriggerMatch.trigger.name}" matched msg=${messageId.substring(0, 12)} ` +
+            `chat=${chatId.substring(0, 12)} kind=${contentTriggerMatch.chatKind}`,
+          );
+        }
+        const ctx: RoutingContext = {
+          chatId,
+          messageId,
+          chatType,
+          larkAppId,
+          ...routing,
+          replyRootId,
+          promptOverride,
+          contentTrigger: contentTriggerMatch
+            ? { name: contentTriggerMatch.trigger.name, chatKind: contentTriggerMatch.chatKind }
+            : undefined,
+        };
         // Serialize per anchor so two messages to the same thread/chat are
         // processed in arrival order — never concurrently. Without this a fast
         // second message interleaves with the first's async session-spawn and is

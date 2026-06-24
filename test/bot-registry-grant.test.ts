@@ -155,4 +155,57 @@ describe('bot-registry grant additions', () => {
     expect(cfgs[2].p2pMode).toBeUndefined();
     expect(cfgs[3].p2pMode).toBeUndefined();
   });
+
+  it('parses contentTriggers and preserves explicit unlimited history settings', () => {
+    const cfgs = parseBotConfigsFromText(JSON.stringify([{
+      larkAppId: 'ct1',
+      larkAppSecret: 's',
+      contentTriggers: [{
+        name: 'summary-trigger',
+        enabled: true,
+        scope: 'both',
+        match: { type: 'keyword', pattern: '总结', caseSensitive: false },
+        history: {
+          topic: { mode: 'current-thread' },
+          regularGroup: { mode: 'recent-messages', limit: 0, sinceHours: 0 },
+        },
+        action: { type: 'start-or-wake-session', prompt: '请总结当前历史。' },
+      }],
+    }]));
+
+    expect(cfgs[0].contentTriggers).toEqual([{
+      name: 'summary-trigger',
+      enabled: true,
+      scope: 'both',
+      match: { type: 'keyword', pattern: '总结', caseSensitive: false },
+      history: {
+        topic: { mode: 'current-thread' },
+        regularGroup: { mode: 'recent-messages', limit: 0, sinceHours: 0 },
+      },
+      action: { type: 'start-or-wake-session', prompt: '请总结当前历史。' },
+    }]);
+  });
+
+  it('drops invalid content trigger regex without failing the whole bot config', () => {
+    const cfgs = parseBotConfigsFromText(JSON.stringify([{
+      larkAppId: 'ct2',
+      larkAppSecret: 's',
+      contentTriggers: [
+        {
+          name: 'bad-regex',
+          scope: 'both',
+          match: { type: 'regex', pattern: '[', caseSensitive: false },
+          action: { type: 'start-or-wake-session', prompt: 'bad' },
+        },
+        {
+          name: 'good-regex',
+          scope: 'regularGroup',
+          match: { type: 'regex', pattern: 'done\\s*$', caseSensitive: true },
+          action: { type: 'start-or-wake-session', prompt: 'good' },
+        },
+      ],
+    }]));
+
+    expect(cfgs[0].contentTriggers?.map(t => t.name)).toEqual(['good-regex']);
+  });
 });

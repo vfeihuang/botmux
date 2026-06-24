@@ -52,6 +52,8 @@ const mockGetCachedChatMode = vi.fn(() => undefined as 'group' | 'topic' | 'p2p'
 const mockGetChatInfo = vi.fn(async () => ({ userCount: 1, botCount: 1 }));
 const mockReplyMessage = vi.fn(async () => 'msg-id');
 const mockUpdateMessage = vi.fn(async () => true);
+const mockListChatMessages = vi.fn(async () => [] as any[]);
+const mockListThreadMessages = vi.fn(async () => [] as any[]);
 // 默认所有 open_id 都判为「非真人」（bot）→ 保持既有用例「全部登记」的预期；
 // 需要模拟真人的用例用 mockResolvedValueOnce(true)。
 const mockIsHumanOpenId = vi.fn(async () => false);
@@ -63,6 +65,8 @@ vi.mock('../src/im/lark/client.js', () => ({
   replyMessage: (...args: any[]) => mockReplyMessage(...args),
   updateMessage: (...args: any[]) => mockUpdateMessage(...args),
   isHumanOpenId: (...args: any[]) => mockIsHumanOpenId(...args),
+  listChatMessages: (...args: any[]) => mockListChatMessages(...args),
+  listThreadMessages: (...args: any[]) => mockListThreadMessages(...args),
 }));
 
 vi.mock('../src/utils/logger.js', () => ({
@@ -112,6 +116,11 @@ const MY_OPEN_ID = 'ou_bot_a_open_id';
 const OTHER_BOT_OPEN_ID = 'ou_bot_b_open_id';
 const USER_OPEN_ID = 'ou_user_123';
 
+beforeEach(() => {
+  mockListChatMessages.mockReset().mockResolvedValue([]);
+  mockListThreadMessages.mockReset().mockResolvedValue([]);
+});
+
 async function flushEventWork() {
   await new Promise(resolve => setImmediate(resolve));
   await new Promise(resolve => setTimeout(resolve, 0));
@@ -131,6 +140,7 @@ function setupBotState(opts?: {
   autoGrantRequestCards?: boolean;
   chatReplyModes?: Record<string, 'chat' | 'new-topic' | 'shared'>;
   p2pMode?: 'thread' | 'chat';
+  contentTriggers?: any[];
 }) {
   mockGetBot.mockReturnValue({
     config: {
@@ -149,10 +159,26 @@ function setupBotState(opts?: {
       autoGrantRequestCards: opts?.autoGrantRequestCards,
       chatReplyModes: opts?.chatReplyModes,
       p2pMode: opts?.p2pMode,
+      contentTriggers: opts?.contentTriggers,
     },
     botOpenId: opts && 'botOpenId' in opts ? opts.botOpenId : MY_OPEN_ID,
     resolvedAllowedUsers: opts?.allowedUsers ?? [],
   });
+}
+
+function summaryContentTrigger(overrides: Record<string, any> = {}) {
+  return {
+    name: 'summary-trigger',
+    enabled: true,
+    scope: 'both',
+    match: { type: 'keyword', pattern: '总结', caseSensitive: false },
+    history: {
+      topic: { mode: 'current-thread' },
+      regularGroup: { mode: 'recent-messages', limit: 50 },
+    },
+    action: { type: 'start-or-wake-session', prompt: '请根据当前会话历史生成总结。' },
+    ...overrides,
+  };
 }
 
 function makeHandlers(): EventHandlers & {
@@ -2521,6 +2547,158 @@ describe('im.message.receive_v1 — 主动开工 场景② (autoStartOnNewTopic)
 
     expect(handlers.handleNewTopic).not.toHaveBeenCalled();
     expect(handlers.handleThreadReply).not.toHaveBeenCalled();
+  });
+});
+
+describe('im.message.receive_v1 — content triggers', () => {
+  let handlers: ReturnType<typeof makeHandlers>;
+
+  beforeEach(() => {
+    capturedHandlers = {};
+    __resetAnchorQueues();
+    __resetEventClaimsForTest();
+    _resetGrantPending();
+    handlers = makeHandlers();
+    handlers.isSessionOwner.mockReturnValue(false);
+    mockGetChatMode.mockResolvedValue('group');
+    setupBotState({
+      allowedUsers: [USER_OPEN_ID],
+      contentTriggers: [summaryContentTrigger()],
+    });
+    startLarkEventDispatcher(MY_APP_ID, 'secret', handlers);
+  });
+
+  it('keeps non-@, non-matching regular group messages silent', async () => {
+    mockGetChatInfo.mockResolvedValue({ userCount: 3, botCount: 1 });
+    const event = makeUserMessageEvent({
+      senderOpenId: USER_OPEN_ID,
+      content: JSON.stringify({ text: '只是普通聊天' }),
+      messageId: 'msg-no-trigger',
+      chatId: 'chat-content-trigger',
+      chatType: 'group',
+    });
+
+    await capturedHandlers['im.message.receive_v1'](event);
+    await flushEventWork();
+
+    expect(handlers.handleNewTopic).not.toHaveBeenCalled();
+    expect(handlers.handleThreadReply).not.toHaveBeenCalled();
+    expect(mockListChatMessages).not.toHaveBeenCalled();
+    expect(mockListThreadMessages).not.toHaveBeenCalled();
+  });
+
+  it('routes a matching regular group message without @ and reads configured full group history', async () => {
+    setupBotState({
+      allowedUsers: [USER_OPEN_ID],
+      contentTriggers: [summaryContentTrigger({
+        match: { type: 'keyword', pattern: '本次问题已解决 ', caseSensitive: false },
+        history: {
+          topic: { mode: 'current-thread' },
+          regularGroup: { mode: 'recent-messages', limit: 0, sinceHours: 0 },
+        },
+        action: { type: 'start-or-wake-session', prompt: '请总结本次已解决问题。' },
+      })],
+    });
+    mockListChatMessages.mockResolvedValue([
+      {
+        message_id: 'm1',
+        msg_type: 'text',
+        body: { content: JSON.stringify({ text: '背景 A' }) },
+        sender: { id: 'ou_a', sender_type: 'user' },
+        create_time: '1000',
+      },
+      {
+        message_id: 'm2',
+        msg_type: 'text',
+        body: { content: JSON.stringify({ text: '结论 B' }) },
+        sender: { id: 'ou_b', sender_type: 'user' },
+        create_time: '2000',
+      },
+    ]);
+    const event = makeUserMessageEvent({
+      senderOpenId: USER_OPEN_ID,
+      content: JSON.stringify({ text: '本次问题已解决 ' }),
+      messageId: 'msg-regular-trigger',
+      chatId: 'chat-content-trigger',
+      chatType: 'group',
+    });
+
+    await capturedHandlers['im.message.receive_v1'](event);
+    await flushEventWork();
+
+    expect(mockListChatMessages).toHaveBeenCalledWith(MY_APP_ID, 'chat-content-trigger', 0);
+    expect(handlers.handleNewTopic).toHaveBeenCalledWith(event, expect.objectContaining({
+      scope: 'chat',
+      anchor: 'chat-content-trigger',
+      larkAppId: MY_APP_ID,
+      contentTrigger: { name: 'summary-trigger', chatKind: 'regularGroup' },
+      promptOverride: expect.stringContaining('请总结本次已解决问题。'),
+    }));
+    const ctx = handlers.handleNewTopic.mock.calls[0][1] as any;
+    expect(ctx.promptOverride).toContain('背景 A');
+    expect(ctx.promptOverride).toContain('结论 B');
+  });
+
+  it('routes a matching topic message without @ and reads the current thread history', async () => {
+    mockGetChatMode.mockResolvedValue('topic');
+    mockListThreadMessages.mockResolvedValue([
+      {
+        message_id: 'root-topic',
+        msg_type: 'text',
+        body: { content: JSON.stringify({ text: '问题背景' }) },
+        sender: { id: 'ou_a', sender_type: 'user' },
+        create_time: '1000',
+      },
+      {
+        message_id: 'reply-topic',
+        root_id: 'root-topic',
+        msg_type: 'text',
+        body: { content: JSON.stringify({ text: '讨论过程' }) },
+        sender: { id: 'ou_b', sender_type: 'user' },
+        create_time: '2000',
+      },
+    ]);
+    const event = makeUserMessageEvent({
+      senderOpenId: USER_OPEN_ID,
+      content: JSON.stringify({ text: '总结' }),
+      rootId: 'root-topic',
+      threadId: 'root-topic',
+      messageId: 'msg-topic-trigger',
+      chatId: 'chat-topic-trigger',
+      chatType: 'group',
+    });
+
+    await capturedHandlers['im.message.receive_v1'](event);
+    await flushEventWork();
+
+    expect(mockListThreadMessages).toHaveBeenCalledWith(MY_APP_ID, 'chat-topic-trigger', 'root-topic', 0);
+    expect(mockListChatMessages).not.toHaveBeenCalled();
+    expect(handlers.handleNewTopic).toHaveBeenCalledWith(event, expect.objectContaining({
+      scope: 'thread',
+      anchor: 'root-topic',
+      contentTrigger: { name: 'summary-trigger', chatKind: 'topic' },
+      promptOverride: expect.stringContaining('请根据当前会话历史生成总结。'),
+    }));
+    const ctx = handlers.handleNewTopic.mock.calls[0][1] as any;
+    expect(ctx.promptOverride).toContain('问题背景');
+    expect(ctx.promptOverride).toContain('讨论过程');
+  });
+
+  it('does not fire content triggers for bot-authored messages without @mention', async () => {
+    const event = makeBotMessageEvent({
+      senderOpenId: OTHER_BOT_OPEN_ID,
+      content: JSON.stringify({ text: '总结' }),
+      rootId: 'root-bot-trigger',
+      chatId: 'chat-content-trigger',
+    });
+
+    await capturedHandlers['im.message.receive_v1'](event);
+    await flushEventWork();
+
+    expect(handlers.handleNewTopic).not.toHaveBeenCalled();
+    expect(handlers.handleThreadReply).not.toHaveBeenCalled();
+    expect(mockListChatMessages).not.toHaveBeenCalled();
+    expect(mockListThreadMessages).not.toHaveBeenCalled();
   });
 });
 

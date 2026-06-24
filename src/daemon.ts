@@ -2163,6 +2163,8 @@ async function startInitialPassthroughSession(args: {
 
 async function handleNewTopic(data: any, ctx: RoutingContext): Promise<void> {
   const { chatId, messageId, chatType, larkAppId, replyRootId } = ctx;
+  const triggerPromptOverride = ctx.promptOverride;
+  const triggerTitle = ctx.contentTrigger ? `[trigger] ${ctx.contentTrigger.name}` : undefined;
   // scope/anchor are mutable here: `/t` / `/topic` may flip a 普通群 chat-scope
   // routing into thread-scope so the bot's first reply seeds a Lark thread.
   let scope = ctx.scope;
@@ -2181,9 +2183,9 @@ async function handleNewTopic(data: any, ctx: RoutingContext): Promise<void> {
   // the contact API. Must run before any await on the sender resolver.
   learnFromMentions(larkAppId, parsed.mentions);
 
-  let content = parsed.content.trim();
+  let content = (triggerPromptOverride ?? parsed.content).trim();
   // Strip leading @<bot> mentions so "@bot /oncall bind" is recognized as a command.
-  let cmdContent = stripLeadingMentions(content, parsed.mentions);
+  let cmdContent = triggerPromptOverride ? content : stripLeadingMentions(content, parsed.mentions);
 
   // `/t` / `/topic` — force the bot to reply in a thread, even in 普通群.
   // In 普通群 the inbound message is chat-scope by default; override to
@@ -2193,7 +2195,7 @@ async function handleNewTopic(data: any, ctx: RoutingContext): Promise<void> {
   // Empty prompt is allowed: the user can fill it in while the repo card is
   // pending (pendingFollowUps in handleThreadReply picks up subsequent text).
   const senderOpenId: string | undefined = data.sender?.sender_id?.open_id;
-  const forceTopic = parseForceTopicInvocation(cmdContent);
+  const forceTopic = triggerPromptOverride ? undefined : parseForceTopicInvocation(cmdContent);
   if (forceTopic) {
     if (await replyGrantRestrictionIfNeeded(
       larkAppId,
@@ -2231,17 +2233,17 @@ async function handleNewTopic(data: any, ctx: RoutingContext): Promise<void> {
     content,
   });
 
-  if (parseWorkflowCommand(cmdContent)) {
+  if (!triggerPromptOverride && parseWorkflowCommand(cmdContent)) {
     if (await replyGrantRestrictionIfNeeded(larkAppId, chatId, senderOpenId, anchor, '/workflow')) {
       return;
     }
   }
-  if (await handleWorkflowCommandIfAny(cmdContent, anchor, chatId, larkAppId, senderOpenId)) {
+  if (!triggerPromptOverride && await handleWorkflowCommandIfAny(cmdContent, anchor, chatId, larkAppId, senderOpenId)) {
     return;
   }
 
   // Intercept daemon commands in new topics (no session needed for some commands)
-  const invocation = parseSlashCommandInvocation(cmdContent);
+  const invocation = triggerPromptOverride ? undefined : parseSlashCommandInvocation(cmdContent);
   if (invocation) {
     const { cmd, content: commandContent } = invocation;
     const restrictedText = grantRestrictedSlashCommandText(larkAppId, chatId, senderOpenId, cmd);
@@ -2380,7 +2382,7 @@ async function handleNewTopic(data: any, ctx: RoutingContext): Promise<void> {
   // weight on first turns. `content` (post force-topic-strip) is what the
   // worker will see; promptContent wraps it for prompt-building paths but
   // leaves `content` untouched for title / log substring uses.
-  const promptContent = buildQuoteHint(parsed, scope, anchor, localeForBot(larkAppId)) + content;
+  const promptContent = triggerPromptOverride ?? (buildQuoteHint(parsed, scope, anchor, localeForBot(larkAppId)) + content);
 
   // Resolve sender identity for <sender> tag injection. The first call to
   // resolveSender for an unseen open_id may await contact.v3.user.get with a
@@ -2399,7 +2401,7 @@ async function handleNewTopic(data: any, ctx: RoutingContext): Promise<void> {
   // For chat-scope, rootMessageId stores the seed message_id (audit only);
   // routing keys off chatId via sessionAnchorId(), so any value works.
   const rootIdForStore = scope === 'thread' ? anchor : messageId;
-  const session = sessionStore.createSession(chatId, rootIdForStore, parsed.content.substring(0, 50), chatType);
+  const session = sessionStore.createSession(chatId, rootIdForStore, (triggerTitle ?? parsed.content).substring(0, 50), chatType);
   const now = Date.now();
   session.larkAppId = larkAppId;
   session.ownerOpenId = senderOpenId;
@@ -2441,7 +2443,7 @@ async function handleNewTopic(data: any, ctx: RoutingContext): Promise<void> {
     pendingMentions: parsed.mentions,
     pendingSender: newTopicSender,
     ownerOpenId: senderOpenId,
-    currentTurnTitle: content.substring(0, 50),
+    currentTurnTitle: (triggerTitle ?? content).substring(0, 50),
     workingDir: pinnedWorkingDir,
   };
   if (pinnedWorkingDir) {
@@ -2734,6 +2736,8 @@ function lookupForeignBotName(senderOpenId: string, larkAppId: string): string {
 
 async function handleThreadReply(data: any, ctx: RoutingContext): Promise<void> {
   const { chatId: ctxChatId, chatType: ctxChatType, scope, anchor, larkAppId, replyRootId } = ctx;
+  const triggerPromptOverride = ctx.promptOverride;
+  const triggerTitle = ctx.contentTrigger ? `[trigger] ${ctx.contentTrigger.name}` : undefined;
   await resolveNonsupportMessage(data, larkAppId);
   const { parsed, resources } = parseEventMessage(data);
 
@@ -2771,7 +2775,7 @@ async function handleThreadReply(data: any, ctx: RoutingContext): Promise<void> 
     ? `${tr('daemon.foreign_bot_mention_prefix', { botName: foreignBotName! }, localeForBot(larkAppId))}\n`
     : '';
 
-  const promptContent = buildQuoteHint(parsed, scope, anchor, localeForBot(larkAppId)) + botSenderPrefix + parsed.content;
+  const promptContent = triggerPromptOverride ?? (buildQuoteHint(parsed, scope, anchor, localeForBot(larkAppId)) + botSenderPrefix + parsed.content);
   const existingHookSession = activeSessions.get(sessionKey(anchor, larkAppId));
   emitHookEvent('thread.reply', {
     larkAppId,
@@ -2830,7 +2834,7 @@ async function handleThreadReply(data: any, ctx: RoutingContext): Promise<void> 
   clearAgentAttentionForHumanInbound();
 
   // Intercept OAuth callback URLs (from /login flow)
-  if (isCallbackUrl(content)) {
+  if (!triggerPromptOverride && isCallbackUrl(content)) {
     const result = await handleCallbackUrl(content);
     if (result) {
       // Route through sessionReply so chat-scope (普通群) lands as a plain
@@ -2841,7 +2845,7 @@ async function handleThreadReply(data: any, ctx: RoutingContext): Promise<void> 
     }
   }
 
-  const threadForceTopic = parseForceTopicInvocation(cmdContent);
+  const threadForceTopic = triggerPromptOverride ? undefined : parseForceTopicInvocation(cmdContent);
   if (threadForceTopic) {
     if (await replyGrantRestrictionIfNeeded(
       larkAppId,
@@ -2854,12 +2858,12 @@ async function handleThreadReply(data: any, ctx: RoutingContext): Promise<void> 
     }
   }
 
-  if (parseWorkflowCommand(cmdContent)) {
+  if (!triggerPromptOverride && parseWorkflowCommand(cmdContent)) {
     if (await replyGrantRestrictionIfNeeded(larkAppId, threadChatId, threadSenderOpenId, anchor, '/workflow')) {
       return;
     }
   }
-  if (await handleWorkflowCommandIfAny(
+  if (!triggerPromptOverride && await handleWorkflowCommandIfAny(
     cmdContent,
     anchor,
     threadChatId,
@@ -2870,7 +2874,7 @@ async function handleThreadReply(data: any, ctx: RoutingContext): Promise<void> 
   }
 
   // Intercept daemon commands
-  const invocation = parseSlashCommandInvocation(cmdContent);
+  const invocation = triggerPromptOverride ? undefined : parseSlashCommandInvocation(cmdContent);
   if (invocation) {
     const { cmd, content: commandContent } = invocation;
     const existingDs = activeSessions.get(sessionKey(anchor, larkAppId));
@@ -2998,7 +3002,7 @@ async function handleThreadReply(data: any, ctx: RoutingContext): Promise<void> 
   // 回调 URL / workflow 已在上方各自 return，可用来中止）。答复权限 = canTalk，由
   // broker 在 submitCustomReply 内按注入的 canTalkChecker 判定：非授权人返回
   // 'unauthorized'，这里 fall through 到正常路由。卡片由 broker.onSettle 自动 PATCH。
-  if (threadSenderOpenId && threadChatId) {
+  if (!triggerPromptOverride && threadSenderOpenId && threadChatId) {
     const askReplyText = cmdContent.trim();
     if (askReplyText) {
       const pendingAsk = findPendingAskByAnchor({ larkAppId, chatId: threadChatId, anchor });
@@ -3032,7 +3036,7 @@ async function handleThreadReply(data: any, ctx: RoutingContext): Promise<void> 
       if (s.scope === 'chat') return s.chatId === ctxChatId && scope === 'chat';
       return s.session.rootMessageId === anchor;
     });
-    if (hasOtherBot && !mentionedThisBot) {
+    if (hasOtherBot && !mentionedThisBot && !triggerPromptOverride) {
       logger.info(`[${larkAppId}] Ignoring ${scope}-scope ${anchor}; another bot already owns it`);
       return;
     }
@@ -3134,7 +3138,7 @@ async function handleThreadReply(data: any, ctx: RoutingContext): Promise<void> 
     // For chat-scope:   rootMessageId = the message_id that triggered this auto-create
     //                   (used as audit trail; routing key is chatId).
     const rootIdForStore = scope === 'thread' ? anchor : parsed.messageId;
-    const session = sessionStore.createSession(autoCreateChatId, rootIdForStore, parsed.content.substring(0, 50), autoCreateChatType);
+    const session = sessionStore.createSession(autoCreateChatId, rootIdForStore, (triggerTitle ?? parsed.content).substring(0, 50), autoCreateChatType);
     const now = Date.now();
     // Bot-started handoff sessions have no human owner; keeping the bot as
     // owner makes daemon-generated footers wake that bot again.
@@ -3188,7 +3192,7 @@ async function handleThreadReply(data: any, ctx: RoutingContext): Promise<void> 
       pendingMentions: parsed.mentions,
       pendingSender: autoCreateSender,
       ownerOpenId,
-      currentTurnTitle: parsed.content.substring(0, 50),
+      currentTurnTitle: (triggerTitle ?? parsed.content).substring(0, 50),
       workingDir: pinnedWorkingDir,
     };
     if (pinnedWorkingDir) {
@@ -3277,7 +3281,7 @@ async function handleThreadReply(data: any, ctx: RoutingContext): Promise<void> 
           chatId: ds.session.chatId,
           whiteboardId: ds.session.whiteboardId,
         });
-    beginNewTurn(ds, parsed.content);
+    beginNewTurn(ds, triggerTitle ?? parsed.content);
     rememberLastCliInput(ds, promptContent, msgContent);
     await noteTurnReceived(ds, parsed.messageId, parsed.content, await getThreadSender(), parsed.messageId);
     ds.worker.send({ type: 'message', content: msgContent, turnId: parsed.messageId } as DaemonToWorker);
@@ -3294,7 +3298,7 @@ async function handleThreadReply(data: any, ctx: RoutingContext): Promise<void> 
       ds.usageLimitRetryTimer = undefined;
     }
     ds.usageLimit = undefined;
-    ds.currentTurnTitle = parsed.content.substring(0, 50);
+    ds.currentTurnTitle = (triggerTitle ?? parsed.content).substring(0, 50);
     // The cosmetic freeze step (above) is gated on a live worker. With no
     // worker we just park the current card in frozenCards — the upcoming
     // new POST will recall it. Parking instead of deleting preserves the
